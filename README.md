@@ -1,1 +1,1 @@
-# finora
+# diviMAX
