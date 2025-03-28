@@ -5,10 +5,13 @@ import os
 
 
 class StockAnalyzer:
-    def __init__(self):
+    def __init__(self, output_dir_path="."):
         self.base_url = "https://financialmodelingprep.com/api/v3"
         load_dotenv()
         self.api_key = os.getenv("FMP_API_KEY")
+        self.dfs = {}
+        self.output_dir_path = output_dir_path
+        os.system (f"mkdir -p {self.output_dir_path}")
 
     def fetch_fmp_fundamentals(self, ticker, start_date, end_date, time_increment='quarter'):
         headers = {"User-Agent": "Mozilla/5.0"}
@@ -27,8 +30,9 @@ class StockAnalyzer:
 
         mask = (merged_df['date'] >= pd.to_datetime(start_date)) & (merged_df['date'] <= pd.to_datetime(end_date))
         result_df = merged_df.loc[mask].sort_values(by='date')
-
-        return result_df.reset_index(drop=True)
+        result_df = result_df.reset_index(drop=True)
+        self.dfs[ticker] = result_df
+        return result_df
 
     def get_dividend_df(self, ticker, start_date, end_date, headers):
         dividend_url = f"{self.base_url}/historical-price-full/stock_dividend/{ticker}?from={start_date}&to={end_date}&apikey={self.api_key}"
@@ -78,9 +82,26 @@ class StockAnalyzer:
             df = pd.DataFrame(mock_data)
             df['date'] = pd.to_datetime(df['date'])
             return df
+        
+    def save_as_parquet(self, ticker, filename=None):
+        """
+        Saves the provided DataFrame to a Parquet file.
+        """
+        df = self.dfs.get(ticker, None)
+        if df is None:
+            raise (f"No ticker named '{ticker}' in the processed data!")
+        if filename is None:
+            filename = f"{ticker.lower()}.parquet"
+        if df.empty:
+            print("[WARN] DataFrame is empty. Nothing to save.")
+            return
+        df.to_parquet(filename, index=False)
+        print(f"[INFO] Saved DataFrame to {filename}")
+
 
 
 if __name__ == "__main__":
-    analyzer = StockAnalyzer()
+    analyzer = StockAnalyzer("/tmp/data")
     df = analyzer.fetch_fmp_fundamentals('AAPL', '2020-01-01', '2023-12-31', time_increment='quarter')
     print(df)
+    analyzer.save_as_parquet ('AAPL')
