@@ -1,8 +1,7 @@
 import requests
-import pandas as pd
+import pandas as pd # consider using polars in the future
 from dotenv import load_dotenv
 import os
-from datetime import datetime
 
 
 class StockAnalyzer:
@@ -18,11 +17,8 @@ class StockAnalyzer:
         dividend_df = self.get_dividend_df(ticker, start_date, end_date, headers)
 
         # Try fetching real data, else load mock
-        ratios_url = f"{self.base_url}/ratios/{ticker}?period={time_increment}&limit=100&apikey={self.api_key}"
-        cf_url = f"{self.base_url}/cash-flow-statement/{ticker}?period={time_increment}&limit=100&apikey={self.api_key}"
-
-        ratios_df = self._get_or_mock_ratios(ratios_url)
-        cf_df = self._get_or_mock_cashflow(cf_url)
+        ratios_df = self._get_or_mock_ratios(ticker, time_increment)
+        cf_df = self._get_or_mock_cashflow(ticker, time_increment)
 
         # Merge and process
         merged_df = pd.merge(ratios_df, cf_df, on='date', how='outer')
@@ -43,7 +39,8 @@ class StockAnalyzer:
             dividend_df['date'] = pd.to_datetime(dividend_df['date'])
         return dividend_df
 
-    def _get_or_mock_ratios(self, url):
+    def _get_or_mock_ratios(self, ticker, time_increment):
+        url = f"{self.base_url}/ratios/{ticker}?period={time_increment}&limit=100&apikey={self.api_key}"
         try:
             resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
             resp.raise_for_status()
@@ -62,7 +59,8 @@ class StockAnalyzer:
             df['date'] = pd.to_datetime(df['date'])
             return df
 
-    def _get_or_mock_cashflow(self, url):
+    def _get_or_mock_cashflow(self, ticker, time_increment):
+        url = f"{self.base_url}/cash-flow-statement/{ticker}?period={time_increment}&limit=100&apikey={self.api_key}"
         try:
             resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
             resp.raise_for_status()
