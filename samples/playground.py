@@ -13,26 +13,31 @@ class StockAnalyzer:
         self.output_dir_path = output_dir_path
         os.system (f"mkdir -p {self.output_dir_path}")
 
-    def fetch_fmp_fundamentals(self, ticker, start_date, end_date, time_increment='quarter'):
+    def fetch_and_save_all_metrics(self, ticker, start_date, end_date, time_increment='quarter'):
         headers = {"User-Agent": "Mozilla/5.0"}
-
-        # Fetch dividend data (usually available in free mode)
+        
+        # Fetch and save dividend data
         dividend_df = self.get_dividend_df(ticker, start_date, end_date, headers)
-
-        # Try fetching real data, else load mock
-        ratios_df = self._get_or_mock_ratios(ticker, time_increment)
-        cf_df = self._get_or_mock_cashflow(ticker, time_increment)
-
-        # Merge and process
-        merged_df = pd.merge(ratios_df, cf_df, on='date', how='outer')
         if not dividend_df.empty:
-            merged_df = pd.merge(merged_df, dividend_df[['date', 'dividend']], on='date', how='outer')
+            self._save_metric_df(dividend_df[['date', 'dividend']], ticker, 'dividend')
+        
+        # Fetch and save ratios
+        ratios_df = self._get_or_mock_ratios(ticker, time_increment)
+        for col in ['peRatio', 'dividendYield', 'payoutRatio']:
+            self._save_metric_df(ratios_df[['date', col]], ticker, col)
+        
+        # Fetch and save free cash flow
+        cf_df = self._get_or_mock_cashflow(ticker, time_increment)
+        self._save_metric_df(cf_df[['date', 'freeCashFlow']], ticker, 'freeCashFlow')
 
-        mask = (merged_df['date'] >= pd.to_datetime(start_date)) & (merged_df['date'] <= pd.to_datetime(end_date))
-        result_df = merged_df.loc[mask].sort_values(by='date')
-        result_df = result_df.reset_index(drop=True)
-        self.dfs[ticker] = result_df
-        return result_df
+    def _save_metric_df(self, df, ticker, metric_name):
+        if df.empty:
+            print(f"[WARN] No data to save for {ticker} - {metric_name}")
+            return
+        file_name = f"{ticker.lower()}_{metric_name}.parquet"
+        file_path = os.path.join(self.output_dir_path, file_name)
+        df.to_parquet(file_path, index=False)
+        print(f"[INFO] Saved {metric_name} data for {ticker} to {file_path}")
 
     def get_dividend_df(self, ticker, start_date, end_date, headers):
         dividend_url = f"{self.base_url}/historical-price-full/stock_dividend/{ticker}?from={start_date}&to={end_date}&apikey={self.api_key}"
@@ -51,13 +56,13 @@ class StockAnalyzer:
             data = resp.json()
             df = pd.DataFrame(data)
             df['date'] = pd.to_datetime(df['date'])
-            return df[['date', 'peRatio', 'dividendYield', 'payoutRatio']]
+            return df[['date', 'peRatio', 'payoutRatio']]
         except Exception:
             print("[INFO] Using mock ratios data.")
             mock_data = [
-                {'date': '2023-12-31', 'peRatio': 28.5, 'dividendYield': 0.006, 'payoutRatio': 0.18},
-                {'date': '2023-09-30', 'peRatio': 27.2, 'dividendYield': 0.006, 'payoutRatio': 0.17},
-                {'date': '2023-06-30', 'peRatio': 29.1, 'dividendYield': 0.006, 'payoutRatio': 0.19}
+                {'date': '2023-12-31', 'peRatio': 28.5, 'payoutRatio': 0.18},
+                {'date': '2023-09-30', 'peRatio': 27.2, 'payoutRatio': 0.17},
+                {'date': '2023-06-30', 'peRatio': 29.1, 'payoutRatio': 0.19}
             ]
             df = pd.DataFrame(mock_data)
             df['date'] = pd.to_datetime(df['date'])
@@ -102,6 +107,4 @@ class StockAnalyzer:
 
 if __name__ == "__main__":
     analyzer = StockAnalyzer("./data")
-    df = analyzer.fetch_fmp_fundamentals('AAPL', '2020-01-01', '2023-12-31', time_increment='quarter')
-    print(df)
-    analyzer.save_as_parquet ('AAPL')
+    analyzer.fetch_and_save_all_metrics('AAPL', '2020-01-01', '2023-12-31', time_increment='quarter')
