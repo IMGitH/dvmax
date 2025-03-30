@@ -3,6 +3,7 @@ import polars as pl
 from dotenv import load_dotenv
 import os
 import matplotlib.pyplot as plt
+import datetime
 
 
 class StockAnalyzer:
@@ -20,7 +21,6 @@ class StockAnalyzer:
         def clean(ticker):
             ticker_path = self.get_ticker_out_path(ticker)
             os.system(f"rm -rf {ticker_path}")
-
         if pre_clean:
             clean(ticker)
         headers = {"User-Agent": "Mozilla/5.0"}
@@ -33,10 +33,14 @@ class StockAnalyzer:
         for col in ['peRatio', 'dividendYield', 'payoutRatio']:
             if col in ratios_df.columns:
                 self._save_metric_df(ratios_df.select(['date', col]), ticker, col)
-
         # Fetch and save free cash flow
         cf_df = self._get_or_mock_cashflow(ticker, time_increment)
         self._save_metric_df(cf_df.select(['date', 'freeCashFlow']), ticker, 'freeCashFlow')
+        # Calculate and save 6M and 12M price returns
+        returns_df = self.calculate_price_returns(ticker, start_date, end_date)
+        if returns_df.height > 0:
+            for col in ['return_6m', 'return_12m']:
+                self._save_metric_df(returns_df.select(['date', col]), ticker, col)
 
     def _save_metric_df(self, df: pl.DataFrame, ticker, metric_name):
         if df.height == 0:
@@ -71,7 +75,7 @@ class StockAnalyzer:
             df = pl.DataFrame(data)
             return df.with_columns(pl.col("date").str.strptime(pl.Date, fmt="%Y-%m-%d")).select(['date', 'peRatio', 'payoutRatio', 'dividendYield'])
         except Exception:
-            print("[INFO] Using mock ratios data.")
+            print("[WARN] Using mock ratios data.")
             mock_data = [
                 {'date': '2023-12-31', 'peRatio': 28.5, 'payoutRatio': 0.18, 'dividendYield': 0.005},
                 {'date': '2023-09-30', 'peRatio': 27.2, 'payoutRatio': 0.17, 'dividendYield': 0.0045},
@@ -89,7 +93,7 @@ class StockAnalyzer:
             df = pl.DataFrame(data)
             return df.with_columns(pl.col("date").str.strptime(pl.Date, fmt="%Y-%m-%d")).select(['date', 'freeCashFlow'])
         except Exception:
-            print("[INFO] Using mock cash flow data.")
+            print("[WARN] Using mock cash flow data.")
             mock_data = [
                 {'date': '2023-12-31', 'freeCashFlow': 21000000000},
                 {'date': '2023-09-30', 'freeCashFlow': 19000000000},
@@ -98,18 +102,73 @@ class StockAnalyzer:
             df = pl.DataFrame(mock_data)
             return df.with_columns(pl.col("date").str.strptime(pl.Date, format="%Y-%m-%d"))
 
-    def save_as_parquet(self, ticker, file_name=None):
-        df = self.dfs.get(ticker, None)
-        if df is None:
-            raise ValueError(f"No ticker named '{ticker}' in the processed data!")
-        if df.height == 0:
-            print("[WARN] DataFrame is empty. Nothing to save.")
-            return
-        if file_name is None:
-            file_name = f"{ticker.lower()}.parquet"
-        file_path = os.path.join(self.output_dir_path, file_name)
-        df.write_parquet(file_path)
-        print(f"[INFO] Saved DataFrame to {file_path}")
+    def _get_or_mock_price_history(self, ticker, start_date, end_date) -> pl.DataFrame:
+        url = f"{self.base_url}/historical-price-full/{ticker}?from={start_date}&to={end_date}&apikey={self.api_key}"
+        try:
+            resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
+            resp.raise_for_status()
+            data = resp.json().get("historical", [])
+            if not data:
+                raise ValueError("Empty price history")
+            df = pl.DataFrame(data)
+            return df.with_columns(pl.col("date").str.strptime(pl.Date, fmt="%Y-%m-%d")).select(["date", "close"])
+        except Exception:
+            print("[WARN] Using mock price data.")
+            mock_data = [
+                {'date': '2023-12-31', 'close': 190.0},
+                {'date': '2023-06-30', 'close': 165.0},
+                {'date': '2022-12-31', 'close': 145.0}
+            ]
+            df = pl.DataFrame(mock_data)
+            return df.with_columns(pl.col("date").str.strptime(pl.Date, format="%Y-%m-%d"))
+   
+    def calculate_price_returns(self, ticker, start_date, end_date) -> pl.DataFrame:
+        today = datetime.date.today()
+        price_df = self._get_or_mock_price_history(ticker, start_date, end_date).sort("date")
+
+        latest_price_df = price_df.filter(pl.col("date") <= today).sort("date", descending=True)
+        if latest_price_df.height == 0:
+            print(f"[WARN] No recent price data to calculate returns for {ticker}.")
+            return pl.DataFrame()
+
+        latest_price = latest_price_df[0, "close"]
+
+        # Use helper to get historical prices
+        return_6m = self._calc_return_from_price_df(price_df, latest_price, today, months_back=6, buffer_days=30)
+        return_12m = self._calc_return_from_price_df(price_df, latest_price, today, months_back=12, buffer_days=45)
+
+        if return_6m is not None:
+            print(f"[INFO] {ticker} - 6M Return: {return_6m:.2%}")
+        else:
+            print(f"[WARN] {ticker} - 6M return unavailable")
+
+        if return_12m is not None:
+            print(f"[INFO] {ticker} - 12M Return: {return_12m:.2%}")
+        else:
+            print(f"[WARN] {ticker} - 12M return unavailable")
+
+        return pl.DataFrame({
+            "date": [today],
+            "return_6m": [return_6m],
+            "return_12m": [return_12m]
+        })
+    
+    def _calc_return_from_price_df(self, df: pl.DataFrame, latest_price: float, today: datetime.date, months_back: int, buffer_days: int) -> float | None:
+        from datetime import timedelta
+
+        target_days = months_back * 30  # approximate months
+        cutoff = today - timedelta(days=target_days)
+        min_date = cutoff - timedelta(days=buffer_days)
+
+        hist_df = df.filter(
+            (pl.col("date") <= cutoff) & (pl.col("date") >= min_date)
+        ).sort("date", descending=True)
+
+        if hist_df.height == 0:
+            return None
+
+        historical_price = hist_df[0, "close"]
+        return (latest_price - historical_price) / historical_price
 
     def plot_metrics(self, ticker, metrics=None):
         ticker_path = self.get_ticker_out_path(ticker)
@@ -117,7 +176,7 @@ class StockAnalyzer:
             raise FileNotFoundError(f"Data path for {ticker} does not exist: {ticker_path}")
 
         if metrics is None:
-            metrics = ['dividend', 'peRatio', 'payoutRatio', 'dividendYield', 'freeCashFlow']
+            metrics = ['dividend', 'peRatio', 'payoutRatio', 'dividendYield', 'freeCashFlow', 'return_6m', 'return_12m']
 
         for metric in metrics:
             file_path = os.path.join(ticker_path, f"{metric}.parquet")
