@@ -77,9 +77,9 @@ class StockAnalyzer:
         except Exception:
             print("[WARN] Using mock ratios data.")
             mock_data = [
-                {'date': '2023-12-31', 'peRatio': 28.5, 'payoutRatio': 0.18, 'dividendYield': 0.005},
-                {'date': '2023-09-30', 'peRatio': 27.2, 'payoutRatio': 0.17, 'dividendYield': 0.0045},
-                {'date': '2023-06-30', 'peRatio': 29.1, 'payoutRatio': 0.19, 'dividendYield': 0.0048}
+                {'date': '2024-12-31', 'peRatio': 28.5, 'payoutRatio': 0.18, 'dividendYield': 0.005},
+                {'date': '2024-09-30', 'peRatio': 27.2, 'payoutRatio': 0.17, 'dividendYield': 0.0045},
+                {'date': '2024-06-30', 'peRatio': 29.1, 'payoutRatio': 0.19, 'dividendYield': 0.0048}
             ]
             df = pl.DataFrame(mock_data)
             return df.with_columns(pl.col("date").str.strptime(pl.Date, format="%Y-%m-%d"))
@@ -95,9 +95,9 @@ class StockAnalyzer:
         except Exception:
             print("[WARN] Using mock cash flow data.")
             mock_data = [
-                {'date': '2023-12-31', 'freeCashFlow': 21000000000},
-                {'date': '2023-09-30', 'freeCashFlow': 19000000000},
-                {'date': '2023-06-30', 'freeCashFlow': 22000000000}
+                {'date': '2024-12-31', 'freeCashFlow': 21000000000},
+                {'date': '2024-09-30', 'freeCashFlow': 19000000000},
+                {'date': '2024-06-30', 'freeCashFlow': 22000000000}
             ]
             df = pl.DataFrame(mock_data)
             return df.with_columns(pl.col("date").str.strptime(pl.Date, format="%Y-%m-%d"))
@@ -115,9 +115,9 @@ class StockAnalyzer:
         except Exception:
             print("[WARN] Using mock price data.")
             mock_data = [
-                {'date': '2023-12-31', 'close': 190.0},
-                {'date': '2023-06-30', 'close': 165.0},
-                {'date': '2022-12-31', 'close': 145.0}
+                {'date': '2024-12-31', 'close': 190.0},
+                {'date': '2024-06-30', 'close': 165.0},
+                {'date': '2023-12-31', 'close': 145.0}
             ]
             df = pl.DataFrame(mock_data)
             return df.with_columns(pl.col("date").str.strptime(pl.Date, format="%Y-%m-%d"))
