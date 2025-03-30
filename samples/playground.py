@@ -13,14 +13,20 @@ class StockAnalyzer:
         self.output_dir_path = output_dir_path
         os.system(f"mkdir -p {self.output_dir_path}")
 
-    def fetch_and_save_all_metrics(self, ticker, start_date, end_date, time_increment='quarter'):
-        headers = {"User-Agent": "Mozilla/5.0"}
+    def fetch_and_save_all_metrics(self, ticker, start_date, end_date,
+                                   time_increment='quarter',
+                                   pre_clean=True):
+        def clean(ticker):
+            ticker_path = self.get_ticker_out_path(ticker)
+            os.system(f"rm -rf {ticker_path}")
 
+        if pre_clean:
+            clean(ticker)
+        headers = {"User-Agent": "Mozilla/5.0"}
         # Fetch and save dividend data
         dividend_df = self.get_dividend_df(ticker, start_date, end_date, headers)
         if dividend_df.height > 0:
             self._save_metric_df(dividend_df.select(['date', 'dividend']), ticker, 'dividend')
-
         # Fetch and save ratios
         ratios_df = self._get_or_mock_ratios(ticker, time_increment)
         for col in ['peRatio', 'dividendYield', 'payoutRatio']:
@@ -35,10 +41,16 @@ class StockAnalyzer:
         if df.height == 0:
             print(f"[WARN] No data to save for {ticker} - {metric_name}")
             return
-        file_name = f"{ticker.lower()}_{metric_name}.parquet"
-        file_path = os.path.join(self.output_dir_path, file_name)
+        ticker_path = self.get_ticker_out_path(ticker)
+        os.system(f"mkdir -p {ticker_path}")
+        file_name = f"{metric_name}.parquet"
+        file_path = os.path.join(ticker_path, file_name)
         df.write_parquet(file_path)
         print(f"[INFO] Saved {metric_name} data for {ticker} to {file_path}")
+
+    def get_ticker_out_path(self, ticker):
+        ticker_path = os.path.join(self.output_dir_path, ticker.lower())
+        return ticker_path
 
     def get_dividend_df(self, ticker, start_date, end_date, headers):
         dividend_url = f"{self.base_url}/historical-price-full/stock_dividend/{ticker}?from={start_date}&to={end_date}&apikey={self.api_key}"
