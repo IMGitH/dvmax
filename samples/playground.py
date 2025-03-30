@@ -2,6 +2,7 @@ import requests
 import polars as pl
 from dotenv import load_dotenv
 import os
+import matplotlib.pyplot as plt
 
 
 class StockAnalyzer:
@@ -61,7 +62,6 @@ class StockAnalyzer:
         df = pl.DataFrame(dividend_data)
         return df.with_columns(pl.col("date").str.strptime(pl.Date, format="%Y-%m-%d"))
 
-
     def _get_or_mock_ratios(self, ticker, time_increment) -> pl.DataFrame:
         url = f"{self.base_url}/ratios/{ticker}?period={time_increment}&limit=100&apikey={self.api_key}"
         try:
@@ -111,7 +111,35 @@ class StockAnalyzer:
         df.write_parquet(file_path)
         print(f"[INFO] Saved DataFrame to {file_path}")
 
+    def plot_metrics(self, ticker, metrics=None):
+        ticker_path = self.get_ticker_out_path(ticker)
+        if not os.path.exists(ticker_path):
+            raise FileNotFoundError(f"Data path for {ticker} does not exist: {ticker_path}")
+
+        if metrics is None:
+            metrics = ['dividend', 'peRatio', 'payoutRatio', 'dividendYield', 'freeCashFlow']
+
+        for metric in metrics:
+            file_path = os.path.join(ticker_path, f"{metric}.parquet")
+            if not os.path.exists(file_path):
+                print(f"[WARN] Missing file for metric: {metric}")
+                continue
+            df = pl.read_parquet(file_path).sort("date")
+            plt.figure(figsize=(10, 5))
+            plt.plot(df['date'].to_numpy(), df[metric].to_numpy(), marker='o', label=metric)
+            plt.xlabel('Date')
+            plt.ylabel(metric)
+            plt.title(f"{metric} over time for {ticker.upper()}")
+            plt.grid(True)
+            plt.tight_layout()
+            plt.xticks(rotation=45)
+            plt.legend()
+            output_img = os.path.join(ticker_path, f"{metric}.png")
+            plt.savefig(output_img)
+            print(f"[INFO] Saved plot for {metric} to {output_img}")
+            plt.close()
 
 if __name__ == "__main__":
     analyzer = StockAnalyzer("./data")
     analyzer.fetch_and_save_all_metrics('AAPL', '2020-01-01', '2023-12-31', time_increment='quarter')
+    analyzer.plot_metrics('AAPL')
