@@ -83,25 +83,25 @@ class StockAnalyzer:
             df['date'] = pd.to_datetime(df['date'])
             return df
         
-    def save_as_parquet(self, ticker, filename=None):
+    def save_as_parquet(self, ticker, file_name=None):
         """
         Saves the provided DataFrame to a Parquet file.
         """
         df = self.dfs.get(ticker, None)
         if df is None:
             raise (f"No ticker named '{ticker}' in the processed data!")
-        if filename is None:
-            filename = f"{ticker.lower()}.parquet"
+        if file_name is None:
+            file_name = f"{ticker.lower()}.parquet"
         if df.empty:
             print("[WARN] DataFrame is empty. Nothing to save.")
             return
-        df.to_parquet(filename, index=False)
-        print(f"[INFO] Saved DataFrame to {filename}")
-
+        file_path = os.path.join(self.output_dir_path, file_name)
+        df.to_parquet(file_path, index=False)
+        print(f"[INFO] Saved DataFrame to {file_path}")
 
 
 if __name__ == "__main__":
-    analyzer = StockAnalyzer("/tmp/data")
+    analyzer = StockAnalyzer("./data")
     df = analyzer.fetch_fmp_fundamentals('AAPL', '2020-01-01', '2023-12-31', time_increment='quarter')
     print(df)
     analyzer.save_as_parquet ('AAPL')
