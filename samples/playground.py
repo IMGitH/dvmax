@@ -77,9 +77,11 @@ class StockAnalyzer:
         except Exception:
             print("[WARN] Using mock ratios data.")
             mock_data = [
+                {"date": "2025-03-31", "peRatio": 26.7, "payoutRatio": 0.18, "dividendYield": 0.0053},
                 {'date': '2024-12-31', 'peRatio': 28.5, 'payoutRatio': 0.18, 'dividendYield': 0.005},
                 {'date': '2024-09-30', 'peRatio': 27.2, 'payoutRatio': 0.17, 'dividendYield': 0.0045},
-                {'date': '2024-06-30', 'peRatio': 29.1, 'payoutRatio': 0.19, 'dividendYield': 0.0048}
+                {'date': '2024-06-30', 'peRatio': 29.1, 'payoutRatio': 0.19, 'dividendYield': 0.0048},
+                {'date': '2024-03-31', 'peRatio': 25.1, 'payoutRatio': 0.17, 'dividendYield': 0.0049}
             ]
             df = pl.DataFrame(mock_data)
             return df.with_columns(pl.col("date").str.strptime(pl.Date, format="%Y-%m-%d"))
@@ -95,9 +97,11 @@ class StockAnalyzer:
         except Exception:
             print("[WARN] Using mock cash flow data.")
             mock_data = [
+                {"date": "2025-03-31", "freeCashFlow": 20000000000},
                 {'date': '2024-12-31', 'freeCashFlow': 21000000000},
                 {'date': '2024-09-30', 'freeCashFlow': 19000000000},
-                {'date': '2024-06-30', 'freeCashFlow': 22000000000}
+                {'date': '2024-06-30', 'freeCashFlow': 22000000000},
+                {'date': '2024-03-31', 'freeCashFlow': 18000000000},
             ]
             df = pl.DataFrame(mock_data)
             return df.with_columns(pl.col("date").str.strptime(pl.Date, format="%Y-%m-%d"))
@@ -115,9 +119,11 @@ class StockAnalyzer:
         except Exception:
             print("[WARN] Using mock price data.")
             mock_data = [
-                {'date': '2024-12-31', 'close': 190.0},
-                {'date': '2024-06-30', 'close': 165.0},
-                {'date': '2023-12-31', 'close': 145.0}
+                {"date": "2025-03-31", "close": 150.0},
+                {'date': '2024-12-31', 'close': 120.0},
+                {'date': '2024-09-30', 'close': 110.0},
+                {'date': '2024-06-30', 'close': 120.0},
+                {'date': '2024-03-31', 'close': 100.0}
             ]
             df = pl.DataFrame(mock_data)
             return df.with_columns(pl.col("date").str.strptime(pl.Date, format="%Y-%m-%d"))
@@ -153,22 +159,34 @@ class StockAnalyzer:
             "return_12m": [return_12m]
         })
     
-    def _calc_return_from_price_df(self, df: pl.DataFrame, latest_price: float, today: datetime.date, months_back: int, buffer_days: int) -> float | None:
+    def _calc_return_from_price_df(
+        self,
+        df: pl.DataFrame,
+        latest_price: float,
+        today: datetime.date,
+        months_back: int,
+        buffer_days: int
+    ) -> float | None:
         from datetime import timedelta
 
         target_days = months_back * 30  # approximate months
         cutoff = today - timedelta(days=target_days)
         min_date = cutoff - timedelta(days=buffer_days)
+        max_date = cutoff + timedelta(days=buffer_days)
 
+        # Narrow to relevant date range
         hist_df = df.filter(
-            (pl.col("date") <= cutoff) & (pl.col("date") >= min_date)
-        ).sort("date", descending=True)
+            (pl.col("date") >= min_date) & (pl.col("date") <= max_date)
+        ).with_columns(
+            (pl.col("date").cast(pl.Date) - pl.lit(cutoff)).abs().alias("date_diff")
+        ).sort("date_diff")
 
         if hist_df.height == 0:
             return None
 
         historical_price = hist_df[0, "close"]
         return (latest_price - historical_price) / historical_price
+
 
     def plot_metrics(self, ticker, metrics=None):
         ticker_path = self.get_ticker_out_path(ticker)
