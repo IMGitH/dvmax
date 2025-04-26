@@ -1,0 +1,5 @@
+venv/
+.vscode/launch.json
+.env
+data/*/*.parquet
+data/*/*.png
