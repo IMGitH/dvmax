@@ -17,6 +17,7 @@ def test_fetch_prices_returns_valid_dataframe():
 def test_fetch_ratios_returns_valid_dataframe():
     fetcher = StockFetcher()
     df = fetcher.fetch_ratios("AAPL", "quarter")
+    # 📌 Reminder for ML pipeline:
     # df = fetcher.fetch_ratios("AAPL", "annual")
     assert df.height > 0
     assert "date" in df.columns
