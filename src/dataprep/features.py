@@ -41,19 +41,6 @@ class FeatureEngineer:
         # Annualize daily standard deviation: multiply by sqrt(252) because ~252 trading days/year
         return std_dev * (252 ** 0.5)
 
-    def compute_dividend_yield(self, dividend_df: pl.DataFrame, price_df: pl.DataFrame) -> float:
-        """Compute dividend yield using dividends and latest price."""
-        dividend_df = ensure_date_column(dividend_df, "date").sort("date")
-        price_df = ensure_date_column(price_df, "date").sort("date")
-
-        if dividend_df.height == 0 or price_df.height == 0:
-            raise ValueError("Dividend or price DataFrame is empty")
-
-        latest_dividend_sum = dividend_df.select(pl.col("dividend")).sum().item()
-        latest_price = price_df[-1, "close"]
-
-        return latest_dividend_sum / latest_price if latest_price != 0 else 0.0
-
 def ensure_date_column(df: pl.DataFrame, column_name: str = "date") -> pl.DataFrame:
     """Ensure a column is properly parsed as Polars Date type."""
     if df[column_name].dtype != pl.Date:
