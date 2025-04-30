@@ -41,6 +41,7 @@ class FeatureEngineer:
         # Annualize daily standard deviation: multiply by sqrt(252) because ~252 trading days/year
         return std_dev * (252 ** 0.5)
 
+# TO-DO: CONSIER TO MOVE TO UTILS
 def ensure_date_column(df: pl.DataFrame, column_name: str = "date") -> pl.DataFrame:
     """Ensure a column is properly parsed as Polars Date type."""
     if df[column_name].dtype != pl.Date:

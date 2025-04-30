@@ -65,6 +65,8 @@ class StockFetcher:
         )
 
     def fetch_ratios(self, ticker: str, period: str = "annual") -> pl.DataFrame:
+        # TO-DO: START + END
+
         """Fetch financial ratios history for a stock from FMP.
         period: 'annual' (default) or 'quarter' for quarterly data.
         """
