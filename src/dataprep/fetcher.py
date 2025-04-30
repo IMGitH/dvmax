@@ -16,6 +16,18 @@ class StockFetcher:
         params["apikey"] = self.api_key
 
         response = requests.get(url, params=params, headers=headers)
+
+        if response.status_code == 403:
+            try:
+                json = response.json()
+                if "Exclusive Endpoint" in json.get("Error Message", ""):
+                    raise PermissionError(
+                        f"Access to '{endpoint}' is restricted under your current FMP plan.\n"
+                        "Consider upgrading at https://site.financialmodelingprep.com/developer/docs/pricing"
+                    )
+            except Exception:
+                pass  # fallback to generic error
+
         response.raise_for_status()
         return response.json()
 
@@ -52,9 +64,19 @@ class StockFetcher:
             fields=["date", "close"]
         )
 
-    def fetch_ratios(self, ticker: str) -> pl.DataFrame:
-        """Fetch financial ratios history for a stock from FMP."""
-        data = self._fetch_endpoint(f"ratios/{ticker}", params={})
+    def fetch_ratios(self, ticker: str, period: str = "annual") -> pl.DataFrame:
+        """Fetch financial ratios history for a stock from FMP.
+        period: 'annual' (default) or 'quarter' for quarterly data.
+        """
+        if period not in {"annual", "quarter"}:
+            raise ValueError("Period must be either 'annual' or 'quarter'")
+
+        params = {"period": period if period == "quarter" else None}
+        try:
+            data = self._fetch_endpoint(f"ratios/{ticker}", params={k: v for k, v in params.items() if v})
+        except PermissionError as e:
+            print(f"[WARN] {e}")
+            return pl.DataFrame()
 
         if not data:
             return pl.DataFrame()
@@ -64,10 +86,13 @@ class StockFetcher:
             "date",
             "priceEarningsRatio",
             "payoutRatio",
-            "dividendYield",
             "priceToSalesRatio",
             "enterpriseValueMultiple",
-            "priceFairValue"
+            "priceFairValue",
+            "returnOnEquity",
+            "debtEquityRatio",
+            "netProfitMargin"
         ]).with_columns(
             pl.col("date").str.strptime(pl.Date, format="%Y-%m-%d")
         )
+    

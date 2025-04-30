@@ -1,4 +1,3 @@
-import pytest
 from src.dataprep.fetcher import StockFetcher
 
 def test_fetch_dividends_returns_valid_dataframe():
@@ -17,9 +16,16 @@ def test_fetch_prices_returns_valid_dataframe():
 
 def test_fetch_ratios_returns_valid_dataframe():
     fetcher = StockFetcher()
-    df = fetcher.fetch_ratios("AAPL")
+    df = fetcher.fetch_ratios("AAPL", "quarter")
+    # df = fetcher.fetch_ratios("AAPL", "annual")
     assert df.height > 0
     assert "date" in df.columns
-    assert "peRatio" in df.columns
+    assert "priceEarningsRatio" in df.columns
     assert "payoutRatio" in df.columns
     assert "dividendYield" in df.columns
+    assert "priceToSalesRatio" in df.columns
+    assert "enterpriseValueMultiple" in df.columns
+    assert "priceFairValue" in df.columns
+    assert "returnOnEquity" in df.columns
+    assert "debtEquityRatio" in df.columns
+    assert "netProfitMargin" in df.columns
