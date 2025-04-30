@@ -3,3 +3,5 @@ venv/
 .env
 data/*/*.parquet
 data/*/*.png
+*.pyc
+__pycache__/
