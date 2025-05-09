@@ -2,6 +2,7 @@ import os
 import requests
 import polars as pl
 from dotenv import load_dotenv
+import datetime
 
 class StockFetcher:
     def __init__(self):
@@ -31,8 +32,20 @@ class StockFetcher:
         response.raise_for_status()
         return response.json()
 
-    def fetch_metric(self, ticker: str, start_date: str, end_date: str, endpoint_template: str, fields: list) -> pl.DataFrame:
+    def _default_date_range(self) -> tuple[str, str]:
+        """Return (start_date, end_date) with start = 4 years ago, end = last full quarter."""
+        today = datetime.date.today()
+        # Find last full quarter end
+        quarter_month = (today.month - 1) // 3 * 3
+        last_quarter_end = datetime.date(today.year, quarter_month, 1) - datetime.timedelta(days=1)
+        start = datetime.date(last_quarter_end.year - 4, last_quarter_end.month, last_quarter_end.day)
+        return start.isoformat(), last_quarter_end.isoformat()
+
+    def fetch_metric(self, ticker: str, start_date: str | None, end_date: str | None, endpoint_template: str, fields: list) -> pl.DataFrame:
         """Generic fetcher to retrieve specific fields for a given metric."""
+        if not start_date or not end_date:
+            start_date, end_date = self._default_date_range()
+
         params = {"from": start_date, "to": end_date}
         data = self._fetch_endpoint(endpoint_template.format(ticker=ticker), params).get("historical", [])
 
@@ -44,7 +57,7 @@ class StockFetcher:
             pl.col("date").str.strptime(pl.Date, format="%Y-%m-%d")
         )
 
-    def fetch_dividends(self, ticker: str, start_date: str, end_date: str) -> pl.DataFrame:
+    def fetch_dividends(self, ticker: str, start_date: str | None = None, end_date: str | None = None) -> pl.DataFrame:
         """Fetch dividends history for a stock from FMP."""
         return self.fetch_metric(
             ticker=ticker,
@@ -54,7 +67,7 @@ class StockFetcher:
             fields=["date", "dividend"]
         )
 
-    def fetch_prices(self, ticker: str, start_date: str, end_date: str) -> pl.DataFrame:
+    def fetch_prices(self, ticker: str, start_date: str | None = None, end_date: str | None = None) -> pl.DataFrame:
         """Fetch historical closing prices for a stock from FMP."""
         return self.fetch_metric(
             ticker=ticker,
@@ -64,14 +77,16 @@ class StockFetcher:
             fields=["date", "close"]
         )
 
-    def fetch_ratios(self, ticker: str, period: str = "annual") -> pl.DataFrame:
-        # TO-DO: START + END
-
+    def fetch_ratios(self, ticker: str, period: str = "annual", start_date: str | None = None, end_date: str | None = None) -> pl.DataFrame:
         """Fetch financial ratios history for a stock from FMP.
         period: 'annual' (default) or 'quarter' for quarterly data.
+        Optional: filter using start_date and end_date.
         """
         if period not in {"annual", "quarter"}:
             raise ValueError("Period must be either 'annual' or 'quarter'")
+
+        if not start_date or not end_date:
+            start_date, end_date = self._default_date_range()
 
         params = {"period": period if period == "quarter" else None}
         try:
@@ -83,7 +98,17 @@ class StockFetcher:
         if not data:
             return pl.DataFrame()
 
-        df = pl.DataFrame(data)
+        df = pl.DataFrame(data).with_columns(
+            pl.col("date").str.strptime(pl.Date, format="%Y-%m-%d")
+        )
+
+        range_start = datetime.datetime.strptime(start_date, "%Y-%m-%d").date()
+        range_end = datetime.datetime.strptime(end_date, "%Y-%m-%d").date()
+
+        df = df.filter((pl.col("date") >= range_start) & (pl.col("date") <= range_end))
+
+        self._validate_ratio_row_count(df, ticker, period, range_start, range_end)
+
         return df.select([
             "date",
             "priceEarningsRatio",
@@ -93,8 +118,20 @@ class StockFetcher:
             "priceFairValue",
             "returnOnEquity",
             "debtEquityRatio",
-            "netProfitMargin"
-        ]).with_columns(
-            pl.col("date").str.strptime(pl.Date, format="%Y-%m-%d")
-        )
-    
+            "netProfitMargin",
+            "dividendYield"
+        ])
+
+    def _validate_ratio_row_count(self, df: pl.DataFrame, ticker: str, period: str, start: datetime.date, end: datetime.date):
+        """Raise if the expected number of rows is too low for the provided date range."""
+        if df.height == 0:
+            raise ValueError(f"No ratio data returned for {ticker} between {start} and {end}.")
+
+        expected_rows = ((end.year - start.year) + 1) * (4 if period == "quarter" else 1)
+        min_expected = max(1, expected_rows // 3)  # allow some missing data
+
+        if df.height < min_expected:
+            raise ValueError(
+                f"Too few rows of {period} data for {ticker} between {start} and {end}: "
+                f"expected at least {min_expected}, got {df.height}."
+            )
