@@ -4,3 +4,4 @@ data/*/*.parquet
 data/*/*.png
 *.pyc
 __pycache__/
+output/
