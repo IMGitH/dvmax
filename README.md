@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.png" alt="Project Logo" width="200"/>
+</p>
+
 # Global Dividend ML Engine – Full Strategy Guide
 
 This document serves as the **complete reference** for designing, storing, and operating the data pipeline and ML system for your global dividend stock selection model. It combines both:
