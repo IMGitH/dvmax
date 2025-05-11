@@ -172,4 +172,99 @@ Efficient, compressed, columnar format:
 
 ---
 
+# Global Dividend ML Engine – Full Tech Stack (Explained)
+
+A practical, layered overview of all technologies used (or considered) in the system — from modeling to deployment.
+
+---
+
+## 1. 🔬 Modeling & Optimization Layer
+
+| Tool                             | Purpose                                                | Status     | Explanation |
+|----------------------------------|--------------------------------------------------------|------------|-------------|
+| **XGBoost**                      | Binary classifier for dividend cut prediction          | ✅ Core     | Reliable, interpretable, works well with tabular financial data |
+| **Polars**                       | Fast dataframe engine for feature pipelines            | ✅ Core     | Efficient handling of time series, much faster than Pandas |
+| **PyArrow**                      | Parquet file access, efficient column I/O              | ✅ Core     | Works with Polars for feature storage and retrieval |
+| **Numpy / Scikit-learn**         | Scoring logic, normalization, helper metrics           | ✅ Core     | Useful for basic model evaluation and math ops |
+| **Quantum-Inspired Optimizers**  | Advanced portfolio selection with constraints          | ⏳ Optional | Solve QUBO problems: maximize yield + minimize risk under constraints like sector caps and turnover limits |
+| **Backtesting Logic**           | Evaluate portfolio performance over time               | ✅ Core     | Custom logic to simulate rebalancing and income vs. drawdowns |
+
+---
+
+## 2. 💾 Data Management & Sources
+
+| Component               | Purpose                                  | Status     | Explanation |
+|--------------------------|-------------------------------------------|------------|-------------|
+| **FMP API**              | Fundamentals, prices, dividends (main feed) | ✅ Core     | Used for global coverage including non-U.S. dividend history |
+| **Parquet Files**        | Format for storing time series + features | ✅ Core     | Efficient, compatible with Polars, perfect for offline ML |
+| **DuckDB** (optional)    | SQL interface on top of Parquet files     | ❌ Skippable| Use only if you prefer SQL over Polars for queries |
+| **OECD / World Bank**    | Optional macro features (GDP, rates)      | ⏳ Optional | May be useful for regime-aware modeling |
+| **Kafka** (optional)     | Live updates & event-triggered pipelines  | ❌ Skippable| Consider only if you build a real-time alert system later |
+
+---
+
+## 3. 🛠️ Development & Infrastructure
+
+| Tool                | Purpose                                  | Status     | Explanation |
+|----------------------|-------------------------------------------|------------|-------------|
+| **Docker**           | Reproducible dev and deployment           | ✅ Core     | Avoids “it works on my machine” problems; enables CI containers |
+| **GitHub + GitHub Actions** | Version control, CI/CD, automation     | ✅ Core     | Automates model updates, tests, documentation builds |
+| **Cursor** (optional) | AI-native coding IDE                     | ⏳ Optional | Boosts iteration speed via assisted dev, refactoring |
+| **Notebooks + Markdown** | Prototypes and documentation           | ✅ Core     | Use for feature trials, visualizations, and tracking logic |
+
+---
+
+## 4. ⚙️ App Interface & Serving
+
+| Tool                  | Purpose                                      | Status     | Explanation |
+|------------------------|---------------------------------------------|------------|-------------|
+| **Streamlit**          | Dashboard to explore stock scores and outputs| ⏳ Optional | Great for early-stage internal visualization |
+| **FastAPI / Flask**    | Serve score inference via REST API          | ⏳ Optional | Required only if exposing the model as a service |
+| **BASE44**             | No-code AI builder to create internal tools | ⏳ Optional | Can be used to develop dashboards or monitor apps without frontend dev |
+| **Lovable**            | Natural-language → full-stack app generation| ⏳ Optional | Helps build UI with Supabase/Firebase backends via AI prompts |
+| **Supabase / Firebase**| Realtime database and auth backend          | ❌ Skippable| Use only if you need stateful apps or user accounts later |
+
+---
+
+## 5. ☁️ Storage & Hosting
+
+| Tool                 | Purpose                                     | Free Tier? | Use Now? | Notes |
+|----------------------|---------------------------------------------|------------|----------|-------|
+| **Local Disk**       | Store raw and processed data during dev     | Yes        | ✅        | Use `/data/` layout with Parquet |
+| **AWS S3**           | Cloud storage for models and outputs        | 5GB        | ⏳        | Standard, reliable, widely supported |
+| **Google Cloud Storage** | Same as above, GCP option              | 5GB        | ⏳        | Useful if using Colab or Vertex later |
+| **Cloudflare R2**    | S3-compatible with no egress fees           | Yes        | ⏳        | Ideal for production model/data hosting |
+| **Backblaze B2**     | Cheap and S3-compatible                     | Yes        | ⏳        | Cost-efficient option for static archive storage |
+
+---
+
+## ✅ Suggested Development Phases
+
+### Phase 1 — Core Engine (Start Now)
+- [x] Fetch data from FMP and store in Parquet
+- [x] Build Polars-based feature pipeline
+- [x] Train XGBoost and evaluate cut-risk predictions
+- [x] Backtest portfolios using yield + score logic
+
+### Phase 2 — Infrastructure
+- [x] Set up Docker + GitHub Actions
+- [ ] Schedule retraining and scoring jobs
+- [ ] Document model output logic in markdown
+
+### Phase 3 — Optimization & App
+- [ ] Integrate QUBO-based optimizer (Toshiba or D-Wave)
+- [ ] Create Streamlit dashboard or FastAPI endpoint
+- [ ] Optionally try BASE44/Lovable to prototype UI faster
+
+### Phase 4 — Hosting
+- [ ] Move to cloud storage (R2 or S3)
+- [ ] Optional: deploy inference or dashboard
+
+---
+
+Let this guide serve as your living blueprint for turning the ML model into a production-ready portfolio engine.
+
+---
+
+
 *Last updated: 2025-05-11*
