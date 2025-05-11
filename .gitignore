@@ -1,5 +1,7 @@
 venv/
-.vscode/launch.json
 .env
 data/*/*.parquet
 data/*/*.png
+*.pyc
+__pycache__/
+output/

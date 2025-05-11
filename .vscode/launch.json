@@ -1,0 +1,20 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "name": "Debug All Pytest Tests",
+        "type": "debugpy",
+        "request": "launch",
+        "module": "pytest",
+        "env": {
+          "PYTHONPATH": "${workspaceFolder}/src"
+        },
+        "args": [
+          "src/tests"
+        ],
+        "console": "integratedTerminal",
+        "justMyCode": true
+      }
+    ]
+  }
+  
