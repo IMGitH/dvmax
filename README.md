@@ -60,6 +60,18 @@ Use rolling and summary features (not raw time series):
 - Avoid lookahead bias by shifting features to match publication lag
 - Output: **cut probability**, used for filtering and scoring
 
+#### Model Training Strategy
+
+- Use **rolling time windows** (e.g., train on 2005–2015, test on 2016, roll forward) to simulate real-world inference.
+- Optionally train **multiple models** on different historical slices to compare robustness (e.g., 2008–2018 vs. 2010–2020).
+- Evaluate with:
+  - **ROC-AUC, F1-score, and recall** (especially for “cut” class)
+  - **Calibration curves** to assess prediction confidence
+- Analyze **how consistently models agree** across test windows (model stability indicator)
+- Choose the best model based on consistent performance + explainability
+- Prefer models that correctly classify cuts with **high recall**, even at cost of some false positives
+
+
 ---
 
 ### Phase 4: Scoring and Optimization
