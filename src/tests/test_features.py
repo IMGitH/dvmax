@@ -1,7 +1,12 @@
 import pytest
 import polars as pl
 import datetime
-from src.dataprep.features import compute_6m_return, compute_volatility, ensure_date_column
+from src.dataprep.features import (
+    compute_6m_return, 
+    compute_volatility, 
+    ensure_date_column,
+    build_fundamental_features
+)
 
 def test_compute_6m_return():
     df = ensure_date_column(pl.DataFrame({
@@ -20,3 +25,24 @@ def test_compute_volatility():
     result = compute_volatility(df)
     assert isinstance(result, float)
     assert result >= 0
+
+def test_build_fundamental_features_returns_expected_metrics():
+    balance_df = pl.DataFrame({
+        "date": ["2023-12-31"],
+        "totalDebt": [1000],
+        "cashAndShortTermInvestments": [200]
+    })
+
+    income_df = pl.DataFrame({
+        "date": ["2023-12-31"],
+        "incomeBeforeTax": [400],
+        "interestExpense": [100]
+    })
+
+    result = build_fundamental_features(balance_df, income_df)
+
+    assert result.height == 1
+    assert "net_debt_to_ebitda" in result.columns
+    assert "ebit_interest_cover" in result.columns
+    assert result["net_debt_to_ebitda"][0] == pytest.approx((1000 - 200) / 400)
+    assert result["ebit_interest_cover"][0] == pytest.approx(400 / 100)
