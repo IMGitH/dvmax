@@ -2,7 +2,18 @@ import datetime
 
 def default_date_range() -> tuple[str, str]:
     today = datetime.date.today()
-    quarter_month = (today.month - 1) // 3 * 3
-    last_quarter_end = datetime.date(today.year, quarter_month, 1) - datetime.timedelta(days=1)
-    start = datetime.date(last_quarter_end.year - 4, last_quarter_end.month, last_quarter_end.day)
-    return start.isoformat(), last_quarter_end.isoformat()
+    year = today.year
+    month = today.month
+
+    # Determine the last full quarter's end date
+    if month <= 3:
+        end = datetime.date(year - 1, 12, 31)
+    elif month <= 6:
+        end = datetime.date(year, 3, 31)
+    elif month <= 9:
+        end = datetime.date(year, 6, 30)
+    else:
+        end = datetime.date(year, 9, 30)
+
+    start = datetime.date(end.year - 4, end.month, end.day)
+    return start.isoformat(), end.isoformat()
