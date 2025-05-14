@@ -1,7 +1,7 @@
 import pytest
 import polars as pl
 import datetime
-from src.dataprep.features import compute_6m_return, compute_volatility, ensure_date_column, find_nearest_price
+from src.dataprep.features import compute_6m_return, compute_volatility, ensure_date_column
 
 def test_compute_6m_return():
     df = ensure_date_column(pl.DataFrame({
