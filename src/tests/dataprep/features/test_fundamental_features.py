@@ -10,17 +10,23 @@ def test_compute_net_debt_to_ebitda():
         "totalDebt": [1000, 1200],
         "cashAndShortTermInvestments": [200, 300],
         "incomeBeforeTax": [400, 300],
+        "interestExpense": [50, 60],
+        "depreciationAndAmortization": [30, 40],
     })
-    expected = [(1000 - 200) / 400, (1200 - 300) / 300]
-    out = compute_net_debt_to_ebitda(df)
+
+    expected = [(1000 - 200) / 480, (1200 - 300) / 400]
+
     print("\n=== test_compute_net_debt_to_ebitda ===")
     print("Input:")
     print(df)
+    out = compute_net_debt_to_ebitda(df)
+    assert "net_debt_to_ebitda" in out.columns
     print("Output:")
     print(out.select(["date", "net_debt_to_ebitda"]))
     print(f"Expected: {expected}")
-    assert "net_debt_to_ebitda" in out.columns
-    assert out["net_debt_to_ebitda"].to_list() == expected
+
+    from pytest import approx
+    assert out["net_debt_to_ebitda"].to_list() == approx(expected)
 
 
 def test_compute_ebit_interest_cover():
