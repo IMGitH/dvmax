@@ -12,11 +12,11 @@ def test_encode_sector_one_hot_correctness():
 
     assert encoded["sector_utilities"] == 1
     assert sum(encoded.values()) == 1
-    assert all(col.startswith("sector_") for col in encoded)
+    assert all(key.startswith("sector_") for key in encoded)
 
 
 def test_encode_sector_from_fmp_profile():
-    profile = fetch_company_profile("AAPL")
+    profile = {"sector": "Technology"}
     sector = profile.get("sector", "")
 
     print("\n=== FMP Profile Sector ===")
