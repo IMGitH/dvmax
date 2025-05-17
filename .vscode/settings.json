@@ -1,6 +1,7 @@
 {
     "python.testing.pytestArgs": [
-        "src/tests"
+        "src/tests",
+        "-s"
     ],
     "python.envFile": "${workspaceFolder}/.env",
     "python.testing.unittestEnabled": false,

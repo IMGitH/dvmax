@@ -46,7 +46,7 @@ jobs:
       run: |
         if [[ "${{ github.event.inputs.debug }}" == "true" ]]; then
           echo "Running pytest in debug mode..."
-          pytest -vv --log-cli-level=DEBUG
+          pytest -vv -s --log-cli-level=DEBUG
         else
           echo "Running pytest in normal mode..."
           pytest
