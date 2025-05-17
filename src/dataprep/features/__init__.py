@@ -7,4 +7,8 @@ from src.dataprep.features.price_features import (
 )
 from src.dataprep.features.metadata_features import encode_sector
 from src.dataprep.features.utils import ensure_date_column, find_nearest_price
-from src.dataprep.feature_pipeline import build_fundamental_features
+from src.dataprep.build_feature_table import build_feature_table
+from src.dataprep.features.fundamental_features import (
+    compute_net_debt_to_ebitda,
+    compute_ebit_interest_cover
+)

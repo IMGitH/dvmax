@@ -2,8 +2,11 @@ import polars as pl
 import datetime
 
 def compute_dividend_cagr(df: pl.DataFrame, years: int) -> float:
-    df = df.sort("date")
+    if df.schema["date"] != pl.String:
+        df = df.with_columns(pl.col("date").cast(pl.String))
     df = df.with_columns(pl.col("date").str.strptime(pl.Date, "%Y-%m-%d"))
+
+    df = df.sort("date")
     if df.height < 2:
         return 0.0
 
