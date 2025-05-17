@@ -33,7 +33,7 @@ def test_compute_yield_vs_median():
 
     end_date = df[-1, "date"]  # 2024-01-01
     lookback_years = 6
-    start_date = end_date - datetime.timedelta(days=lookback_years * 365)
+    start_date = end_date.replace(year=end_date.year - lookback_years)
 
     filtered = df.filter((pl.col("date") >= start_date) & (pl.col("dividendYield") > 0)).sort("date")
 

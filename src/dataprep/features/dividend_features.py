@@ -40,12 +40,13 @@ def compute_yield_vs_median(df: pl.DataFrame, lookback_years: int) -> float:
     df = df.drop_nulls("date").sort("date")
 
     end_date = df[-1, "date"]
-    start_date = end_date - datetime.timedelta(days=lookback_years * 365)
+    start_date = end_date.replace(year=end_date.year - lookback_years)
 
     filtered = df.filter(
         (pl.col("date") >= start_date) & (pl.col("dividendYield") > 0)
     ).sort("date")
 
+    filtered = filtered.drop_nulls("dividendYield")
     if filtered.is_empty():
         return 0.0
 
