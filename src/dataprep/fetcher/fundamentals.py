@@ -1,43 +1,52 @@
 import polars as pl
 from datetime import datetime
 from src.dataprep.fetcher.base import FMPClient
-from src.dataprep.fetcher.utils import default_date_range
 
-def _fetch_fundamental(endpoint: str, ticker: str, period: str, start_date: str | None, end_date: str | None) -> pl.DataFrame:
+
+def _fetch_fundamental(endpoint: str, ticker: str, period: str = "annual", limit: int = 4) -> pl.DataFrame:
+    """
+    Internal utility to fetch financial data (e.g. income statement, balance sheet) from FMP.
+
+    Parameters:
+        endpoint (str): API endpoint path (e.g., "income-statement").
+        ticker (str): Stock ticker symbol.
+        period (str): Either "annual" or "quarter".
+        limit (int): Number of most recent records to return (max 4 for free-tier annual data).
+
+    Returns:
+        pl.DataFrame: The requested subset of financial data, parsed and sorted.
+    """
     if period not in {"annual", "quarter"}:
         raise ValueError("Period must be 'annual' or 'quarter'")
-
-    start_date, end_date = start_date or default_date_range()[0], end_date or default_date_range()[1]
+    if not (1 <= limit <= 4):
+        raise ValueError("limit must be between 1 and 4 (FMP free-tier constraint)")
 
     client = FMPClient()
-    data = client.fetch(f"{endpoint}/{ticker}", {"period": period} if period == "quarter" else {})
+    params = {"period": period} if period == "quarter" else {}
+    data = client.fetch(f"{endpoint}/{ticker}", params)
     if not data:
         return pl.DataFrame()
 
-    df = pl.DataFrame(data).with_columns(
-        pl.col("date").str.strptime(pl.Date, format="%Y-%m-%d")
-    )
+    df = pl.DataFrame(data)
+    if df.schema.get("date") == pl.Utf8:
+        df = df.with_columns(pl.col("date").str.strptime(pl.Date, "%Y-%m-%d"))
 
-    start = datetime.strptime(start_date, "%Y-%m-%d").date()
-    end = datetime.strptime(end_date, "%Y-%m-%d").date()
+    return df.sort("date", descending=True).head(limit).sort("date")
 
-    return df.filter((pl.col("date") >= start) & (pl.col("date") <= end))
 
-def fetch_income_statement(ticker: str, period="annual", start_date=None, end_date=None) -> pl.DataFrame:
-    return _fetch_fundamental("income-statement", ticker, period, start_date, end_date).select([
+def fetch_income_statement_fund(ticker: str, period: str = "annual", limit: int = 4) -> pl.DataFrame:
+    return _fetch_fundamental("income-statement", ticker, period, limit).select([
         "date", "incomeBeforeTax", "interestExpense"
     ])
 
-def fetch_balance_sheet(ticker: str, period="annual", start_date=None, end_date=None) -> pl.DataFrame:
-    return _fetch_fundamental("balance-sheet-statement", ticker, period, start_date, end_date).select([
+
+def fetch_balance_sheet_fund(ticker: str, period: str = "annual", limit: int = 4) -> pl.DataFrame:
+    return _fetch_fundamental("balance-sheet-statement", ticker, period, limit).select([
         "date", "cashAndShortTermInvestments", "totalDebt"
     ])
 
-def fetch_cashflow_statement(ticker: str, period="annual", start_date=None, end_date=None) -> pl.DataFrame:
-    return _fetch_fundamental("cash-flow-statement", ticker, period, start_date, end_date).select([
+
+def fetch_cashflow_statement_fund(ticker: str, period: str = "annual", limit: int = 4) -> pl.DataFrame:
+    return _fetch_fundamental("cash-flow-statement", ticker, period, limit).select([
         "date", "depreciationAndAmortization", "capitalExpenditure"
     ])
-
-
-if __name__ == "__main__":
-    df = fetch_income_statement("AAPL", period="annual")

@@ -1,15 +1,30 @@
-import datetime
 import polars as pl
 from src.dataprep.fetcher.base import FMPClient
-from src.dataprep.fetcher.utils import default_date_range
 
-def fetch_ratios(ticker: str, period: str = "annual", start_date: str | None = None, end_date: str | None = None) -> pl.DataFrame:
+def fetch_ratios(ticker: str, period: str = "annual", limit: int = 4) -> pl.DataFrame:
+    """
+    Fetches valuation and profitability ratios for a given ticker using FMP free-tier API.
+
+    Parameters:
+        ticker (str): Stock ticker symbol (e.g., "AAPL").
+        period (str): Either "annual" or "quarter". Defaults to "annual".
+        limit (int): Number of most recent records to return (max 4 for annual data on free tier).
+
+    Returns:
+        pl.DataFrame: DataFrame with selected ratios and date column.
+
+    Notes:
+        - Only the most recent 4 annual records are available from FMP for free users.
+        - This function slices locally to return up to `limit` entries, sorted by date descending.
+    """
     if period not in {"annual", "quarter"}:
         raise ValueError("Period must be 'annual' or 'quarter'")
+    if not (1 <= limit <= 4):
+        raise ValueError("limit must be between 1 and 4 (FMP free-tier constraint)")
 
-    start_date, end_date = start_date or default_date_range()[0], end_date or default_date_range()[1]
     client = FMPClient()
     params = {"period": period} if period == "quarter" else {}
+
     try:
         data = client.fetch(f"ratios/{ticker}", params)
     except PermissionError as e:
@@ -19,14 +34,12 @@ def fetch_ratios(ticker: str, period: str = "annual", start_date: str | None = N
     if not data:
         return pl.DataFrame()
 
-    df = pl.DataFrame(data).with_columns(
-        pl.col("date").str.strptime(pl.Date, format="%Y-%m-%d")
-    )
+    df = pl.DataFrame(data)
 
-    range_start = datetime.datetime.strptime(start_date, "%Y-%m-%d").date()
-    range_end = datetime.datetime.strptime(end_date, "%Y-%m-%d").date()
+    if df.schema["date"] == pl.Utf8:
+        df = df.with_columns(pl.col("date").str.strptime(pl.Date, format="%Y-%m-%d"))
 
-    df = df.filter((pl.col("date") >= range_start) & (pl.col("date") <= range_end))
+    df = df.sort("date", descending=True).head(limit).sort("date")
 
     return df.select([
         "date", "priceEarningsRatio", "payoutRatio", "priceToSalesRatio",

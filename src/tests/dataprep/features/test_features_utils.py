@@ -11,7 +11,6 @@ def test_find_nearest_price_returns_closest_value():
     print("\n=== test_find_nearest_price_returns_closest_value ===")
     print(f"Target date: {target_date}")
     print(df)
-
     result = find_nearest_price(df, target_date)
     print(f"Nearest price: {result}")
 
@@ -27,10 +26,8 @@ def test_find_nearest_price_on_exact_match():
     print("\n=== test_find_nearest_price_on_exact_match ===")
     print(f"Target date: {target_date}")
     print(df)
-
     result = find_nearest_price(df, target_date)
     print(f"Nearest price: {result}")
-
     assert result == 110
 
 
@@ -43,8 +40,6 @@ def test_find_nearest_price_with_unsorted_data():
     print("\n=== test_find_nearest_price_with_unsorted_data ===")
     print(f"Target date: {target_date}")
     print(df)
-
     result = find_nearest_price(df, target_date)
     print(f"Nearest price: {result}")
-
     assert result == 100

@@ -1,6 +1,6 @@
 import datetime
 
-def default_date_range() -> tuple[str, str]:
+def default_date_range(lookback_years:int=4) -> tuple[str, str]:
     today = datetime.date.today()
     year = today.year
     month = today.month
@@ -15,5 +15,5 @@ def default_date_range() -> tuple[str, str]:
     else:
         end = datetime.date(year, 9, 30)
 
-    start = datetime.date(end.year - 4, end.month, end.day)
+    start = datetime.date(end.year - lookback_years, end.month, end.day)
     return start.isoformat(), end.isoformat()
