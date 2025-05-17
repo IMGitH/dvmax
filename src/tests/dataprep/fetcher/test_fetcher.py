@@ -4,7 +4,8 @@ from src.dataprep.fetcher import (
     fetch_ratios,
     fetch_income_statement_fund,
     fetch_balance_sheet_fund,
-    fetch_cashflow_statement_fund
+    fetch_cashflow_statement_fund,
+    fetch_company_profile
 )
 import polars as pl
 import datetime
@@ -153,3 +154,8 @@ def test_fetch_cashflow_statement_fund_returns_valid_dataframe():
     assert "date" in df.columns
     assert "depreciationAndAmortization" in df.columns
     assert "capitalExpenditure" in df.columns
+
+def test_fetch_company_profile_returns_sector():
+    result = fetch_company_profile("AAPL")
+    assert "sector" in result
+    assert isinstance(result["sector"], str)
