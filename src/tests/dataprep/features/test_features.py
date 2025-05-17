@@ -23,6 +23,16 @@ def test_compute_6m_return():
     assert isinstance(result, float)
     assert pytest.approx(result, rel=1e-2) == 0.2
 
+def test_compute_6m_return_precise_date():
+    df = pl.DataFrame({
+        "date": ["2024-11-17", "2025-05-17"],
+        "close": [228.0, 211.26]
+    })
+    df = ensure_date_column(df)
+    result = compute_6m_return(df, as_of_date=datetime.date(2025, 5, 17))
+    expected = (211.26 - 228.0) / 228.0
+    assert pytest.approx(result, rel=1e-4) == expected
+
 def test_compute_12m_return():
     df = ensure_date_column(pl.DataFrame({
         "date": ["2023-07-01", "2024-07-01"],

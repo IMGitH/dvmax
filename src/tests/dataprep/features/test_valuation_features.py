@@ -31,3 +31,12 @@ def test_extract_latest_pe_pfcf_from_2018():
     print(f"Extracted PE: {pe}, PFCF: {pfcf}")
     assert pe == 25.6
     assert pfcf == 21.3
+
+def test_extract_latest_pe_pfcf_skips_invalid():
+    df = pl.DataFrame({
+        "date": ["2024-12-31", "2025-03-31"],
+        "priceEarningsRatio": [0.0, 32.9],
+        "priceToFreeCashFlowsRatio": [0.0, 32.6]
+    })
+    result = extract_latest_pe_pfcf(df)
+    assert result == (32.9, 32.6)

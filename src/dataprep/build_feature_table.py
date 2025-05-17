@@ -1,5 +1,3 @@
-# src/dataprep/feature_table.py
-
 import polars as pl
 from datetime import date
 
@@ -80,3 +78,42 @@ def build_feature_table(ticker: str, as_of: date = date.today()) -> pl.DataFrame
     }
 
     return pl.DataFrame([all_features])
+
+
+def print_feature_report(ticker: str, as_of: date = date.today()) -> None:
+    print(f"\n=== Feature Report for {ticker.upper()} ===\n")
+    df = build_feature_table(ticker, as_of=as_of)
+    row = df.row(0, named=True)
+
+    print(f"- As of: {as_of.isoformat()}")
+    print(f"- Shape: {df.shape}")
+    print(f"\n=== Column Groups ===")
+
+    def print_group(title: str, keys: list[str]):
+        print(f"\n→ {title}")
+        for key in keys:
+            val = row.get(key, "N/A")
+            print(f"{key:25}: {val}")
+
+    # Logical groups
+    print_group("Price-Based Features", [
+        "6m_return", "12m_return", "volatility", "max_drawdown"
+    ])
+
+    print_group("Fundamentals", [
+        "net_debt_to_ebitda", "ebit_interest_cover"
+    ])
+
+    print_group("Dividends", [
+        "dividend_cagr_5y", "yield_vs_median"
+    ])
+
+    print_group("Valuation", [
+        "pe_ratio", "pfcf_ratio"
+    ])
+
+    print_group("Sector Encoding", sorted([k for k in row if k.startswith("sector_")]))
+
+if __name__ == "__main__":
+    print_feature_report("AAPL")
+    

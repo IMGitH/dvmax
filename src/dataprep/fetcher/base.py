@@ -1,4 +1,5 @@
 import os
+import time
 import requests
 from dotenv import load_dotenv
 
@@ -24,6 +25,11 @@ class FMPClient:
                     )
             except Exception:
                 pass
+            
+        while response.status_code == 429:
+            print("Rate limited. Sleeping for 60 seconds...")
+            time.sleep(60)
+            response = requests.get(url)
 
         response.raise_for_status()
         return response.json()
