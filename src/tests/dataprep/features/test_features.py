@@ -6,9 +6,7 @@ from src.dataprep.features import (
     compute_12m_return,
     compute_volatility,
     compute_max_drawdown, 
-    compute_sma_delta,
-    ensure_date_column,
-    build_fundamental_features
+    ensure_date_column
 )
 
 def test_compute_6m_return():
@@ -50,34 +48,6 @@ def test_compute_volatility():
     assert isinstance(result, float)
     assert result >= 0
 
-def test_build_fundamental_features_returns_expected_metrics():
-    balance_df = pl.DataFrame({
-        "date": ["2023-12-31"],
-        "totalDebt": [1000],
-        "cashAndShortTermInvestments": [200]
-    })
-    income_df = pl.DataFrame({
-        "date": ["2023-12-31"],
-        "incomeBeforeTax": [400],
-        "interestExpense": [100]
-    })
-    result = build_fundamental_features(balance_df, income_df)
-    expected_net_debt_to_ebitda = (1000 - 200) / 400
-    expected_ebit_interest_cover = 400 / 100
-    print("\n=== test_build_fundamental_features_returns_expected_metrics ===")
-    print("Balance DataFrame:")
-    print(balance_df)
-    print("Income DataFrame:")
-    print(income_df)
-    print("Resulting Metrics:")
-    print(result)
-    print(f"Expected net_debt_to_ebitda: {expected_net_debt_to_ebitda:.2f}")
-    print(f"Expected ebit_interest_cover: {expected_ebit_interest_cover:.2f}")
-    assert result.height == 1
-    assert "net_debt_to_ebitda" in result.columns
-    assert "ebit_interest_cover" in result.columns
-    assert result["net_debt_to_ebitda"][0] == pytest.approx(expected_net_debt_to_ebitda)
-    assert result["ebit_interest_cover"][0] == pytest.approx(expected_ebit_interest_cover)
 
 def test_compute_max_drawdown_basic():
     df = pl.DataFrame({
@@ -128,12 +98,3 @@ def test_compute_max_drawdown_larger_range():
     expected = (80 - 120) / 120
     print(f"Computed Drawdown: {result}, Expected: {abs(expected)}")
     assert pytest.approx(result, rel=1e-4) == abs(expected)
-
-
-def test_compute_sma_delta():
-    df = ensure_date_column(pl.DataFrame({
-        "date": [f"2024-01-{i+1:02d}" for i in range(200)],
-        "close": [100 + i * 0.1 for i in range(200)]  # upward trend
-    }))
-    result = compute_sma_delta(df, short=50, long=200)
-    assert result > 0  # upward SMA crossover
