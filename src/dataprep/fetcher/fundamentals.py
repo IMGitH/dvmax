@@ -3,15 +3,15 @@ from datetime import datetime
 from src.dataprep.fetcher.base import FMPClient
 
 
-def _fetch_fundamental(endpoint: str, ticker: str, period: str = "annual", limit: int = 4) -> pl.DataFrame:
+def _fetch_fundamental(endpoint: str, ticker: str, limit: int, period: str = "annual") -> pl.DataFrame:
     """
     Internal utility to fetch financial data (e.g. income statement, balance sheet) from FMP.
 
     Parameters:
         endpoint (str): API endpoint path (e.g., "income-statement").
         ticker (str): Stock ticker symbol.
-        period (str): Either "annual" or "quarter".
         limit (int): Number of most recent records to return (max 4 for free-tier annual data).
+        period (str): Either "annual" or "quarter".
 
     Returns:
         pl.DataFrame: The requested subset of financial data, parsed and sorted.
@@ -34,19 +34,19 @@ def _fetch_fundamental(endpoint: str, ticker: str, period: str = "annual", limit
     return df.sort("date", descending=True).head(limit).sort("date")
 
 
-def fetch_income_statement_fund(ticker: str, period: str = "annual", limit: int = 4) -> pl.DataFrame:
-    return _fetch_fundamental("income-statement", ticker, period, limit).select([
+def fetch_income_statement_fund(ticker: str, limit: int, period: str = "annual") -> pl.DataFrame:
+    return _fetch_fundamental("income-statement", ticker, limit, period).select([
         "date", "incomeBeforeTax", "interestExpense"
     ])
 
 
-def fetch_balance_sheet_fund(ticker: str, period: str = "annual", limit: int = 4) -> pl.DataFrame:
-    return _fetch_fundamental("balance-sheet-statement", ticker, period, limit).select([
+def fetch_balance_sheet_fund(ticker: str, limit: int, period: str = "annual") -> pl.DataFrame:
+    return _fetch_fundamental("balance-sheet-statement", ticker, limit, period).select([
         "date", "cashAndShortTermInvestments", "totalDebt"
     ])
 
 
-def fetch_cashflow_statement_fund(ticker: str, period: str = "annual", limit: int = 4) -> pl.DataFrame:
-    return _fetch_fundamental("cash-flow-statement", ticker, period, limit).select([
+def fetch_cashflow_statement_fund(ticker: str, limit: int, period: str = "annual") -> pl.DataFrame:
+    return _fetch_fundamental("cash-flow-statement", ticker, limit, period).select([
         "date", "depreciationAndAmortization", "capitalExpenditure"
     ])
