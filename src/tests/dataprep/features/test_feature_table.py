@@ -57,7 +57,9 @@ def test_build_feature_table_basic(
     mock_profile.return_value = {"sector": "Technology"}
 
     print("\n=== Running build_feature_table ===")
-    df = build_feature_table("AAPL", as_of=date(2023, 12, 31))
+    df = build_feature_table("AAPL", as_of=date(2023, 12, 31),
+                             div_lookback_years=5,
+                             other_lookback_years=3)
     print_features(df)
 
     # --- Assertions ---

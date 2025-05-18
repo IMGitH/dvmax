@@ -93,7 +93,7 @@ def _check_ratios_dataframe(df: pl.DataFrame, ticker: str, period: str):
 
 def test_fetch_ratios_returns_valid_dataframe():
     print("\n=== test_fetch_ratios_returns_valid_dataframe ===")
-    df = fetch_ratios("AAPL", "annual")
+    df = fetch_ratios("AAPL", limit=2)
     print(f"Returned {df.height} rows")
     _check_ratios_dataframe(df, ticker="AAPL", period="annual")
 
@@ -111,7 +111,8 @@ def test_fetch_ratios_limited_years():
 
 def test_fetch_income_statement_fund_returns_valid_dataframe():
     ticker = "AAPL"
-    df = fetch_income_statement_fund(ticker)
+    limit = 4
+    df = fetch_income_statement_fund(ticker, limit)
 
     print("\n=== test_fetch_income_statement_fund_returns_valid_dataframe ===")
     print(f"Input: ticker={ticker}")
@@ -130,7 +131,8 @@ def test_fetch_income_statement_fund_returns_valid_dataframe():
 
 def test_fetch_balance_sheet_fund_returns_valid_dataframe():
     ticker = "AAPL"
-    df = fetch_balance_sheet_fund(ticker)
+    limit = 4
+    df = fetch_balance_sheet_fund(ticker, limit)
 
     print("\n=== test_fetch_balance_sheet_fund_returns_valid_dataframe ===")
     print(f"Input: ticker={ticker}")
@@ -144,7 +146,8 @@ def test_fetch_balance_sheet_fund_returns_valid_dataframe():
 
 def test_fetch_cashflow_statement_fund_returns_valid_dataframe():
     ticker = "AAPL"
-    df = fetch_cashflow_statement_fund(ticker)
+    limit = 4
+    df = fetch_cashflow_statement_fund(ticker, limit)
 
     print("\n=== test_fetch_cashflow_statement_fund_returns_valid_dataframe ===")
     print(f"Input: ticker={ticker}")

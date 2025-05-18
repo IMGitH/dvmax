@@ -53,7 +53,7 @@ def fetch_prices(
     actual_start = df.select(pl.col("date").min()).item()
     actual_end = df.select(pl.col("date").max()).item()
 
-    if actual_start > start_dt:
+    if actual_start > start_dt + timedelta(days=grace_days):
         raise RuntimeError(f"Data for {ticker} starts at {actual_start}, after requested {start_date}.")
     if actual_end < end_dt - timedelta(days=grace_days):
         raise RuntimeError(f"Data for {ticker} ends at {actual_end}, too far before requested {end_date}.")
