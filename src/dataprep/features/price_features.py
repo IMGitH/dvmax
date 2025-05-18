@@ -2,7 +2,7 @@ from src.dataprep.features.utils import ensure_date_column, find_nearest_price
 import polars as pl
 import datetime
 from dateutil.relativedelta import relativedelta
-
+import logging
 
 def compute_return_over_period(
     df: pl.DataFrame,
@@ -20,7 +20,7 @@ def compute_return_over_period(
         price_now = find_nearest_price(df, as_of_date)
         price_past = find_nearest_price(df, past_date)
     except ValueError as e:
-        print(f"Warning: {e}")
+        logging.warning(e)
         return 0.0
     return (price_now - price_past) / price_past
 
