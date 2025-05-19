@@ -39,15 +39,16 @@ def build_feature_table_from_inputs(ticker: str, inputs: dict, as_of: date) -> p
     df_fundamentals = compute_ebit_interest_cover(df_fundamentals)
 
     pe, pfcf = extract_latest_pe_pfcf(ratios)
-
+    if sector_df is not None and not sector_df.is_empty():
+        rel_return = compute_sector_relative_return(prices, sector_df, 180, as_of)
+    else:
+        rel_return = 0.0
     features_price = {
         "6m_return": compute_6m_return(prices, as_of),
         "12m_return": compute_12m_return(prices, as_of),
         "volatility": compute_volatility(prices),
         "max_drawdown": compute_max_drawdown(prices),
-        "sector_relative_6m": (
-            compute_sector_relative_return(prices, sector_df, 180, as_of) if sector_df else 0.0
-        )
+        "sector_relative_6m": rel_return
     }
 
     features_fundamentals = {
@@ -60,8 +61,10 @@ def build_feature_table_from_inputs(ticker: str, inputs: dict, as_of: date) -> p
         "eps_cagr_3y": compute_eps_cagr(income, years=3),
         "fcf_cagr_3y": compute_fcf_cagr(ratios, years=3),
     }
-
+    
     features_dividends = {
+        "dividend_yield": safe_get(ratios, "dividendYield"), # dividends?
+        "dividend_cagr_3y": compute_dividend_cagr(dividends, splits, years=3),
         "dividend_cagr_5y": compute_dividend_cagr(dividends, splits, years=5),
         "yield_vs_median": compute_yield_vs_median(ratios, lookback_years=5)
     }
