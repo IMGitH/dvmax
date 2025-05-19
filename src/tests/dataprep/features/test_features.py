@@ -117,12 +117,12 @@ def test_compute_sector_relative_return_simple_case():
     as_of = datetime.date(2024, 1, 1)
 
     target_df = pl.DataFrame({
-        "date": ["2023-07-01", "2024-01-01"],
+        "date": ["2023-07-05", "2024-01-01"],
         "close": [100, 120]
     }).with_columns(pl.col("date").str.strptime(pl.Date, "%Y-%m-%d"))
 
     sector_df = pl.DataFrame({
-        "date": ["2023-07-01", "2024-01-01"],
+        "date": ["2023-07-05", "2024-01-01"],
         "close": [200, 210]
     }).with_columns(pl.col("date").str.strptime(pl.Date, "%Y-%m-%d"))
 

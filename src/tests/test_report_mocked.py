@@ -29,13 +29,37 @@ from src.dataprep.features import (
 @patch("src.dataprep.fetcher.fetch_all.fetch_company_profile")
 @patch("src.dataprep.fetcher.fetch_all.fetch_splits")
 def test_print_report_with_mocked_data(mock_splits, mock_profile, mock_income, mock_balance, mock_ratios, mock_dividends, mock_prices):
-    # Minimal mock values
-    mock_prices.return_value = pl.DataFrame({"date": ["2024-01-01", "2024-06-01"], "close": [100, 120]})
-    mock_dividends.return_value = pl.DataFrame({"date": ["2019-01-01", "2020-01-01", "2024-01-01"], "dividend": [0.6, 1, 2]})
-    mock_ratios.return_value = pl.DataFrame({"date": ["2023-12-31"], "priceEarningsRatio": [15.0], "priceToFreeCashFlowsRatio": [20.0]})
-    mock_balance.return_value = pl.DataFrame({"date": ["2023-12-31"], "fcf": [150] , "totalDebt": [100], "cashAndShortTermInvestments": [50]})
-    mock_income.return_value = pl.DataFrame({"date": ["2023-12-31"], "operatingIncome": [210], "incomeBeforeTax": [200], "interestExpense": [10], "depreciationAndAmortization": [20], "eps": [5]})
-    mock_profile.return_value = {"sector": "Technology"}
+    mock_prices.return_value = pl.DataFrame({
+    "date": ["2024-01-01", "2024-06-01"],
+    "close": [100, 120]
+    }).with_columns(pl.col("date").str.strptime(pl.Date, "%Y-%m-%d"))
+
+    mock_dividends.return_value = pl.DataFrame({
+        "date": ["2019-01-01", "2020-01-01", "2024-01-01"],
+        "dividend": [0.6, 1, 2]
+    }).with_columns(pl.col("date").str.strptime(pl.Date, "%Y-%m-%d"))
+
+    mock_ratios.return_value = pl.DataFrame({
+        "date": ["2023-12-31"],
+        "priceEarningsRatio": [15.0],
+        "priceToFreeCashFlowsRatio": [20.0]
+    }).with_columns(pl.col("date").str.strptime(pl.Date, "%Y-%m-%d"))
+
+    mock_balance.return_value = pl.DataFrame({
+        "date": ["2023-12-31"],
+        "fcf": [150],
+        "totalDebt": [100],
+        "cashAndShortTermInvestments": [50]
+    }).with_columns(pl.col("date").str.strptime(pl.Date, "%Y-%m-%d"))
+
+    mock_income.return_value = pl.DataFrame({
+        "date": ["2023-12-31"],
+        "operatingIncome": [210],
+        "incomeBeforeTax": [200],
+        "interestExpense": [10],
+        "depreciationAndAmortization": [20],
+        "eps": [5]
+    }).with_columns(pl.col("date").str.strptime(pl.Date, "%Y-%m-%d"))
     mock_splits.return_value = pl.DataFrame()
 
     from src.dataprep.fetcher.fetch_all import fetch_all

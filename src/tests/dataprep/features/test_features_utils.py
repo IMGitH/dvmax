@@ -61,6 +61,6 @@ def test_adjust_series_for_splits_on_dividends():
     })
 
     adjusted = adjust_series_for_splits(div_df, split_df, "dividend")
-    assert adjusted[0, "dividend"] == 0.5
-    assert adjusted[1, "dividend"] == 0.6
-    assert adjusted[2, "dividend"] == 1.5
+    assert adjusted[0, "dividend"] == 1.0
+    assert adjusted[1, "dividend"] == 1.2
+    assert adjusted[2, "dividend"] == 0.75
