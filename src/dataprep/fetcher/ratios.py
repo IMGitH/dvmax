@@ -45,5 +45,5 @@ def fetch_ratios(ticker: str, limit:int, period: str = "annual") -> pl.DataFrame
         "date", "priceEarningsRatio", "priceToFreeCashFlowsRatio", 
         "payoutRatio", "priceToSalesRatio", "enterpriseValueMultiple", 
         "priceFairValue", "returnOnEquity", "debtEquityRatio", 
-        "netProfitMargin", "dividendYield"
+        "netProfitMargin", "dividendYield", "freeCashFlowPerShare"
     ])

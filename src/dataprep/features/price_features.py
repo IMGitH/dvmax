@@ -3,6 +3,7 @@ import polars as pl
 import datetime
 from dateutil.relativedelta import relativedelta
 import logging
+from datetime import timedelta
 
 def compute_return_over_period(
     df: pl.DataFrame,
@@ -61,3 +62,38 @@ def compute_max_drawdown(df: pl.DataFrame) -> float:
         max_drawdown = max(max_drawdown, drawdown)
 
     return max_drawdown  # already positive
+
+
+def compute_sector_relative_return(target_df: pl.DataFrame, sector_df: pl.DataFrame, period_days: int, as_of_date: datetime.date) -> float:
+    target_df = target_df.sort("date")
+    sector_df = sector_df.sort("date")
+    past_date = as_of_date - timedelta(days=period_days)
+
+    def find_price(df):
+        filtered = df.filter(pl.col("date") <= past_date)
+        return filtered[-1, "close"] if not filtered.is_empty() else None
+
+    try:
+        target_now = target_df[-1, "close"]
+        target_past = find_price(target_df)
+        sector_now = sector_df[-1, "close"]
+        sector_past = find_price(sector_df)
+
+        if None in (target_past, sector_past):
+            return 0.0
+
+        target_return = (target_now - target_past) / target_past
+        sector_return = (sector_now - sector_past) / sector_past
+
+        return target_return - sector_return
+    except Exception as e:
+        logging.warning(f"[Sector Relative Return] Computation failed: {e}")
+        return 0.0
+
+
+def compute_payout_ratio(df: pl.DataFrame) -> float:
+    if "payoutRatio" in df.columns:
+        valid = df.drop_nulls("payoutRatio").filter(pl.col("payoutRatio") > 0)
+        if not valid.is_empty():
+            return valid[-1, "payoutRatio"]
+    return 0.0

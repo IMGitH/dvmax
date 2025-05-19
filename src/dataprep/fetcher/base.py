@@ -16,20 +16,28 @@ class FMPClient:
         params["apikey"] = self.api_key
         response = requests.get(url, params=params, headers=headers)
 
+        # Handle 403 Forbidden: API limits exceeded
         if response.status_code == 403:
             try:
                 msg = response.json().get("Error Message", "")
+                if "Limit Reach" in msg:
+                    raise PermissionError(
+                        "API limit reached. Please upgrade your plan or reduce request frequency."
+                    )
                 if "Exclusive Endpoint" in msg:
                     raise PermissionError(
                         f"Access to '{endpoint}' is restricted. Consider upgrading your plan."
                     )
-            except Exception:
-                pass
-            
+            except Exception as e:
+                raise PermissionError(f"Failed to access '{endpoint}': {str(e)}")
+
+        # Handle rate limiting (429): wait for 60 seconds and retry
         while response.status_code == 429:
             print("Rate limited. Sleeping for 60 seconds...")
             time.sleep(60)
-            response = requests.get(url)
+            response = requests.get(url, params=params, headers=headers)
 
+        # Handle any other non-2xx status codes
         response.raise_for_status()
+
         return response.json()

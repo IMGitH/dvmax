@@ -1,5 +1,4 @@
 import polars as pl
-from datetime import datetime
 from src.dataprep.fetcher.base import FMPClient
 
 
@@ -36,7 +35,8 @@ def _fetch_fundamental(endpoint: str, ticker: str, limit: int, period: str = "an
 
 def fetch_income_statement_fund(ticker: str, limit: int, period: str = "annual") -> pl.DataFrame:
     return _fetch_fundamental("income-statement", ticker, limit, period).select([
-        "date", "incomeBeforeTax", "interestExpense"
+        "date", "incomeBeforeTax", "interestExpense", "eps", "netIncome", "revenue", "operatingIncome", "grossProfitRatio", 
+        "ebitdaratio", "operatingIncomeRatio", "netIncomeRatio", "depreciationAndAmortization", "weightedAverageShsOut"
     ])
 
 

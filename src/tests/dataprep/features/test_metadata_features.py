@@ -1,5 +1,4 @@
 from src.dataprep.features import encode_sector
-from src.dataprep.fetcher import fetch_company_profile
 
 
 def test_encode_sector_one_hot_correctness():

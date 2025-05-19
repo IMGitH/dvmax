@@ -1,4 +1,4 @@
-from src.dataprep.features.valuation_features import extract_latest_pe_pfcf
+from src.dataprep.features import extract_latest_pe_pfcf
 import polars as pl
 
 

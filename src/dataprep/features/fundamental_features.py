@@ -1,5 +1,5 @@
 import polars as pl
-import warnings
+import logging
 
 def compute_net_debt_to_ebitda(df: pl.DataFrame) -> pl.DataFrame:
     """
@@ -35,7 +35,7 @@ def compute_ebit_interest_cover(df: pl.DataFrame) -> pl.DataFrame:
     if "operatingIncome" in df.columns:
         ebit_col = pl.col("operatingIncome")
     elif "incomeBeforeTax" in df.columns:
-        warnings.warn("[EBIT] Falling back to 'incomeBeforeTax' due to missing 'operatingIncome'")
+        logging.warning("[EBIT] Falling back to 'incomeBeforeTax' due to missing 'operatingIncome'")
         ebit_col = pl.col("incomeBeforeTax")
     else:
         raise ValueError("Missing both 'operatingIncome' and 'incomeBeforeTax'. Cannot compute EBIT.")

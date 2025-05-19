@@ -6,8 +6,12 @@ from src.dataprep.features import (
     compute_12m_return,
     compute_volatility,
     compute_max_drawdown, 
-    ensure_date_column
+    ensure_date_column,
+    compute_sector_relative_return,
+    compute_payout_ratio
 )
+
+# from src.dataprep.features.valuation_features import extract_latest_pe_pfcf
 
 def test_compute_6m_return():
     df = ensure_date_column(pl.DataFrame({
@@ -108,3 +112,29 @@ def test_compute_max_drawdown_larger_range():
     expected = (80 - 120) / 120
     print(f"Computed Drawdown: {result}, Expected: {abs(expected)}")
     assert pytest.approx(result, rel=1e-4) == abs(expected)
+
+def test_compute_sector_relative_return_simple_case():
+    as_of = datetime.date(2024, 1, 1)
+
+    target_df = pl.DataFrame({
+        "date": ["2023-07-01", "2024-01-01"],
+        "close": [100, 120]
+    }).with_columns(pl.col("date").str.strptime(pl.Date, "%Y-%m-%d"))
+
+    sector_df = pl.DataFrame({
+        "date": ["2023-07-01", "2024-01-01"],
+        "close": [200, 210]
+    }).with_columns(pl.col("date").str.strptime(pl.Date, "%Y-%m-%d"))
+
+    result = compute_sector_relative_return(target_df, sector_df, 180, as_of)
+    expected = (120/100) - (210/200)
+    assert round(result, 4) == round(expected, 4)
+
+def test_compute_payout_ratio_basic():
+    df = pl.DataFrame({
+        "date": ["2021-01-01", "2022-01-01"],
+        "payoutRatio": [0.3, 0.4]
+    }).with_columns(pl.col("date").str.strptime(pl.Date, "%Y-%m-%d"))
+
+    result = compute_payout_ratio(df)
+    assert result == 0.4

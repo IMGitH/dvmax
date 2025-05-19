@@ -1,91 +1,88 @@
-import pytest
 import polars as pl
 from datetime import date
-from unittest.mock import patch
-from src.dataprep.features import build_feature_table
+from src.dataprep.report.feature_table import build_feature_table_from_inputs
 
-@patch("src.dataprep.fetcher.fetch_prices")
-@patch("src.dataprep.fetcher.fetch_dividends")
-@patch("src.dataprep.fetcher.fetch_ratios")
-@patch("src.dataprep.fetcher.fetch_balance_sheet_fund")
-@patch("src.dataprep.fetcher.fetch_income_statement_fund")
-@patch("src.dataprep.fetcher.fetch_company_profile")
-def test_build_feature_table_basic(
-    mock_profile, mock_income, mock_balance,
-    mock_ratios, mock_dividends, mock_prices
-):
-    # --- Mock prices ---
-    prices_df = pl.DataFrame({
-        "date": ["2023-01-01", "2023-06-01", "2023-12-31"],
-        "close": [100, 150, 120]
+def test_build_feature_table_from_inputs_minimal():
+    # Prices with enough history for 6m and 12m return
+    prices = pl.DataFrame({
+        "date": [
+            date(2024, 5, 17),  # ~12m ago
+            date(2024, 11, 17), # ~6m ago
+            date(2025, 5, 17)
+        ],
+        "close": [90.0, 100.0, 112.0]
     })
-    mock_prices.return_value = prices_df
 
-    # --- Mock dividends ---
-    dividends_df = pl.DataFrame({
-        "date": [f"{2018+i}-06-01" for i in range(6)],
-        "dividend": [1.0, 1.1, 1.21, 1.33, 1.46, 1.6]
+    # Dividends for 5Y CAGR (1 per year)
+    dividends = pl.DataFrame({
+        "date": [
+            date(2020, 6, 1),
+            date(2021, 6, 1),
+            date(2022, 6, 1),
+            date(2023, 6, 1),
+            date(2024, 6, 1)
+        ],
+        "dividend": [0.8, 1.0, 1.1, 1.2, 1.3]
     })
-    mock_dividends.return_value = dividends_df
 
-    # --- Mock ratios ---
-    ratios_df = pl.DataFrame({
-        "date": ["2023-01-01", "2023-12-31"],
-        "priceEarningsRatio": [22.0, 24.0],
-        "priceToFreeCashFlowsRatio": [18.0, 19.5],
-        "dividendYield": [0.015, 0.018]
+    splits = pl.DataFrame({
+        "date": [],
+        "numerator": [],
+        "denominator": []
     })
-    mock_ratios.return_value = ratios_df
 
-    # --- Mock income statement ---
-    income_df = pl.DataFrame({
-        "date": ["2023-12-31"],
-        "incomeBeforeTax": [100],
-        "interestExpense": [10]
+    ratios = pl.DataFrame({
+        "date": [date(2025, 5, 17)],
+        "priceEarningsRatio": [20.0],
+        "priceToFreeCashFlowsRatio": [25.0],
+        "dividendYield": [0.012],
+        "payoutRatio": [0.3]
     })
-    mock_income.return_value = income_df
 
-    # --- Mock balance sheet ---
-    balance_df = pl.DataFrame({
-        "date": ["2023-12-31"],
-        "totalDebt": [300],
-        "cashAndShortTermInvestments": [0]
+    income = pl.DataFrame({
+        "date": [date(2023, 5, 17)],
+        "incomeBeforeTax": [500],
+        "interestExpense": [50],
+        "depreciationAndAmortization": [100],
+        "eps": [2.0]
     })
-    mock_balance.return_value = balance_df
 
-    # --- Mock company profile ---
-    mock_profile.return_value = {"sector": "Technology"}
+    balance = pl.DataFrame({
+        "date": [date(2023, 5, 17)],
+        "totalDebt": [1000],
+        "cashAndShortTermInvestments": [200],
+        "freeCashFlow": [300]
+    })
 
-    print("\n=== Running build_feature_table ===")
-    df = build_feature_table("AAPL", as_of=date(2023, 12, 31),
-                             div_lookback_years=5,
-                             other_lookback_years=3)
-    print_features(df)
+    profile = {"sector": "Technology"}
+
+    inputs = {
+        "prices": prices,
+        "dividends": dividends,
+        "splits": splits,
+        "ratios": ratios,
+        "income": income,
+        "balance": balance,
+        "profile": profile
+    }
+
+    result = build_feature_table_from_inputs("AAPL", inputs, as_of=date(2025, 5, 17))
 
     # --- Assertions ---
-    assert isinstance(df, pl.DataFrame)
-    assert df.height == 1
-    assert df[0, "ticker"] == "AAPL"
-    assert "net_debt_to_ebitda" in df.columns
-    assert "6m_return" in df.columns
-    assert "sector_technology" in df.columns
+    assert result.shape[0] == 1
 
+    expected_columns = {
+        "ticker", "6m_return", "12m_return", "volatility", "max_drawdown",
+        "net_debt_to_ebitda", "ebit_interest_cover", "ebit_interest_cover_capped",
+        "eps_cagr_3y", "fcf_cagr_3y",
+        "dividend_cagr_5y", "yield_vs_median",
+        "pe_ratio", "pfcf_ratio",
+        "sector_technology"
+    }
 
-def print_features(df: pl.DataFrame):
-    print("\n=== Feature Table Summary ===")
-    print(f"- Shape: {df.shape}")
-    
-    print("\n=== Columns ===")
-    for col in df.columns:
-        print(f"• {col}")
-    
-    print("\n=== Full Row Data ===")
-    row = df[0].to_dict(as_series=False)
-    for key, value in row.items():
-        print(f"{key:>20}: {value[0]}")
+    missing = expected_columns - set(result.columns)
+    assert not missing, f"Missing expected columns: {missing}"
 
-    print("\n=== Sector One-Hot Encoding ===")
-    sector_cols = [col for col in df.columns if col.startswith("sector_")]
-    sector_row = df.select(sector_cols).to_dicts()[0]
-    for col, val in sector_row.items():
-        print(f"{col:>20}: {val}")
+    assert result[0, "ticker"] == "AAPL"
+    assert isinstance(result[0, "pe_ratio"], float)
+    assert isinstance(result[0, "6m_return"], float)
