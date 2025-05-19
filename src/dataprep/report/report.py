@@ -25,6 +25,8 @@ def print_feature_report_from_df(df: pl.DataFrame, inputs: dict, as_of: date):
     profile_df = inputs.get("profile")
     if isinstance(profile_df, pl.DataFrame):
         sector_str = profile_df["sector"] if "sector" in profile_df.columns else "N/A"
+    elif isinstance(profile_df, dict):
+        sector_str = profile_df.get("sector", "N/A")
     else:
         sector_str = "N/A"
 

@@ -50,7 +50,7 @@ def test_build_feature_table_from_inputs_minimal():
         "freeCashFlow": [300]
     })
 
-    profile = {"sector": "Technology"}
+    profile = {"sector": "Technology", "country": "'United States'"}
 
     inputs = {
         "prices": prices,

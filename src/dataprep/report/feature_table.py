@@ -79,6 +79,7 @@ def build_feature_table_from_inputs(ticker: str, inputs: dict, as_of: date) -> p
     }
 
     sector = extract_sector_name(profile)
+    country = profile.get("country", "N/A")
     features_sector = encode_sector(sector)
 
     all_features = {
@@ -88,7 +89,8 @@ def build_feature_table_from_inputs(ticker: str, inputs: dict, as_of: date) -> p
         **features_growth,
         **features_dividends,
         **features_valuation,
-        **features_sector
+        **features_sector,
+        "country": country
     }
 
     return pl.DataFrame([all_features])
