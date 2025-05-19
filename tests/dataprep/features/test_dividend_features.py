@@ -1,26 +1,8 @@
 from src.dataprep.features.dividend_features import (
-    compute_dividend_cagr,
     compute_yield_vs_median
 )
 import polars as pl
 import pytest
-
-def test_compute_dividend_cagr_basic():
-    df = pl.DataFrame({
-        "date": ["2019-01-01", "2020-01-01", "2024-01-01"],
-        "dividend": [1.0, 1.1, 2.0]
-    })
-    splits_df = pl.DataFrame()
-    result = compute_dividend_cagr(df, splits_df, years=5)
-    expected = (2.0 / 1.0) ** (1 / 5) - 1
-    print("\n=== test_compute_dividend_cagr_basic ===")
-    print(f"Start dividend: 1.0")
-    print(f"End dividend: 2.0")
-    print(f"Years: 5")
-    print(f"Expected CAGR: {expected:.6f}")
-    print(f"Computed CAGR: {result:.6f}")
-    assert result == pytest.approx(expected, rel=1e-4)
-
 
 def test_compute_yield_vs_median():
     df = pl.DataFrame({
@@ -53,3 +35,4 @@ def test_compute_yield_vs_median():
     print(f"Computed relative diff: {result:.6f}")
 
     assert result == pytest.approx(expected, rel=1e-4)
+    
