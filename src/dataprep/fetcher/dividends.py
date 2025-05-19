@@ -6,6 +6,7 @@ import yfinance as yf
 from src.dataprep.fetcher.base import FMPClient
 from src.dataprep.fetcher.utils import default_date_range
 from src.dataprep.fetcher.splits import fetch_splits
+import logging
 
 def adjust_dividends_with_splits(div_df: pl.DataFrame, split_df: pl.DataFrame) -> pl.DataFrame:
     for row in split_df.iter_rows(named=True):
@@ -30,13 +31,13 @@ def fetch_dividends(
     start_dt = datetime.strptime(start_date, "%Y-%m-%d").date()
     end_dt = datetime.strptime(end_date, "%Y-%m-%d").date()
     grace_period = relativedelta(months=3 * grace_quarters)
-    max_acceptable_start = start_dt + grace_period
 
     if mode == "yfinance":
         yf_ticker = yf.Ticker(ticker)
         dividends = yf_ticker.dividends
         if dividends.empty:
-            raise RuntimeError("No dividend data from yfinance.")
+            logging.warning(f"No dividend data found for {ticker} in yfinance.")
+            return pl.DataFrame()
         df_yf = (
             pl.DataFrame({"date": dividends.index, "dividend": dividends.values})
             .with_columns(pl.col("date").cast(pl.Date))
@@ -49,7 +50,8 @@ def fetch_dividends(
     response = client.fetch(f"historical-price-full/stock_dividend/{ticker}", {"from": start_date, "to": end_date})
     data = response.get("historical", [])
     if not data:
-        raise RuntimeError("No dividend data from FMP.")
+        logging.warning(f"No dividend data found for {ticker} in FMP.")
+        return pl.DataFrame()
     df_fmp = pl.DataFrame(data).select(["date", "dividend"]).with_columns(
         pl.col("date").str.strptime(pl.Date, "%Y-%m-%d")
     )
