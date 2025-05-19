@@ -25,8 +25,17 @@ def adjust_series_for_splits(
     skip_warning: bool = False
 ) -> pl.DataFrame:
     """
-    Generic utility to adjust any time series column for stock splits.
-    E.g., dividends, EPS, FCF/share.
+    Adjusts a time series column (e.g., dividends, EPS) for stock splits using cumulative backward adjustment.
+    Assumes both `df` and `split_df` contain a 'date' column.
+    
+    Parameters:
+        df: Polars DataFrame with 'date' and the column to adjust.
+        split_df: Polars DataFrame with 'date' and 'split_ratio'.
+        column: The name of the column in `df` to adjust.
+        skip_warning: If True, suppresses warning if split_df is empty.
+
+    Returns:
+        A new DataFrame with the adjusted `column`.
     """
     if "date" not in df.columns or column not in df.columns:
         raise ValueError(f"Both 'date' and '{column}' columns must be present in the input dataframe.")
@@ -36,13 +45,28 @@ def adjust_series_for_splits(
             logging.warning("[Splits] No split history available — skipping adjustment.")
         return df
 
-    for row in split_df.iter_rows(named=True):
-        date, ratio = row["date"], row["split_ratio"]
-        df = df.with_columns(
-            pl.when(pl.col("date") < date)
-            .then(pl.col(column) / ratio)
-            .otherwise(pl.col(column))
-            .alias(column)
-        )
+    # Step 1: Sort and compute cumulative ratio
+    split_df = (
+        split_df
+        .sort("date")
+        .with_columns([
+            pl.col("split_ratio").cum_prod().alias("cumulative_ratio"),
+            pl.col("date").alias("split_date")
+        ])
+    )
 
-    return df
+    # Step 2: Join split info to main df using backward join
+    df = df.sort("date")
+    df = df.join_asof(split_df, left_on="date", right_on="split_date", strategy="backward") # "backward" since we dont have enough data
+
+    # Step 3: Fill nulls and compute adjusted values safely
+    df = df.with_columns([
+        pl.col("cumulative_ratio").fill_null(1.0).alias("adj_factor")
+    ])
+    
+    df = df.with_columns([
+        (pl.col(column) / pl.col("adj_factor")).alias(column)
+    ])
+
+    # Step 4: Drop temporary columns
+    return df.drop("split_date", "split_ratio", "cumulative_ratio", "adj_factor")
