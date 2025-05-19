@@ -1,17 +1,13 @@
 import polars as pl
 from datetime import date
+import random
+from datetime import timedelta
 from src.dataprep.report.feature_table import build_feature_table_from_inputs
 
 def test_build_feature_table_from_inputs_minimal():
     # Prices with enough history for 6m and 12m return
-    prices = pl.DataFrame({
-        "date": [
-            date(2024, 5, 17),  # ~12m ago
-            date(2024, 11, 17), # ~6m ago
-            date(2025, 5, 17)
-        ],
-        "close": [90.0, 100.0, 112.0]
-    })
+    # Create a daily range from 2024-01-01 to 2025-05-17
+    prices = get_random_prices()
 
     # Dividends for 5Y CAGR (1 per year)
     dividends = pl.DataFrame({
@@ -86,3 +82,25 @@ def test_build_feature_table_from_inputs_minimal():
     assert result[0, "ticker"] == "AAPL"
     assert isinstance(result[0, "pe_ratio"], float)
     assert isinstance(result[0, "6m_return"], float)
+
+def get_random_prices():
+    start_date = date(2024, 1, 1)
+    end_date = date(2025, 5, 17)
+    n_days = (end_date - start_date).days + 1
+
+    dates = [start_date + timedelta(days=i) for i in range(n_days)]
+
+    # Simulate prices with slight random walk from a starting value
+    price = 90.0
+    closes = []
+    for _ in range(n_days):
+        price *= 1 + random.uniform(-0.002, 0.003)  # small daily change
+        closes.append(round(price, 2))
+
+    # Create DataFrame
+    prices = pl.DataFrame({
+        "date": dates,
+        "close": closes
+    })
+    
+    return prices

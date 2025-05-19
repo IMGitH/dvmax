@@ -1,7 +1,7 @@
 import polars as pl
 from unittest.mock import patch
 from datetime import date
-
+from tests.dataprep.features.test_feature_table import get_random_prices
 from src.dataprep.report.feature_table import build_feature_table_from_inputs
 from src.dataprep.report.report import print_feature_report_from_df
 from src.dataprep.features import (
@@ -29,10 +29,7 @@ from src.dataprep.features import (
 @patch("src.dataprep.fetcher.fetch_all.fetch_company_profile")
 @patch("src.dataprep.fetcher.fetch_all.fetch_splits")
 def test_print_report_with_mocked_data(mock_splits, mock_profile, mock_income, mock_balance, mock_ratios, mock_dividends, mock_prices):
-    mock_prices.return_value = pl.DataFrame({
-    "date": ["2024-01-01", "2024-06-01"],
-    "close": [100, 120]
-    }).with_columns(pl.col("date").str.strptime(pl.Date, "%Y-%m-%d"))
+    mock_prices.return_value = get_random_prices()
 
     mock_dividends.return_value = pl.DataFrame({
         "date": ["2019-01-01", "2020-01-01", "2024-01-01"],
@@ -61,6 +58,11 @@ def test_print_report_with_mocked_data(mock_splits, mock_profile, mock_income, m
         "eps": [5]
     }).with_columns(pl.col("date").str.strptime(pl.Date, "%Y-%m-%d"))
     mock_splits.return_value = pl.DataFrame()
+
+    mock_profile.return_value = pl.DataFrame({
+    "date": ["2023-12-31"],
+    "sector": ["Technology"]
+    }).with_columns(pl.col("date").str.strptime(pl.Date, "%Y-%m-%d"))
 
     from src.dataprep.fetcher.fetch_all import fetch_all
     inputs = fetch_all("MOCK", div_lookback_years=5, other_lookback_years=4)
