@@ -59,10 +59,11 @@ def test_print_report_with_mocked_data(mock_splits, mock_profile, mock_income, m
     }).with_columns(pl.col("date").str.strptime(pl.Date, "%Y-%m-%d"))
     mock_splits.return_value = pl.DataFrame()
 
-    mock_profile.return_value = pl.DataFrame({
-    "date": ["2023-12-31"],
-    "sector": ["Technology"]
-    }).with_columns(pl.col("date").str.strptime(pl.Date, "%Y-%m-%d"))
+    mock_profile.return_value = {
+        "date": ["2023-12-31"],
+        "sector": "Technology",
+        "country": "United States",
+    }
 
     from src.dataprep.fetcher.fetch_all import fetch_all
     inputs = fetch_all("MOCK", div_lookback_years=5, other_lookback_years=4)
