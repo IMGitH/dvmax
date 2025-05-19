@@ -3,7 +3,7 @@ import polars as pl
 import datetime
 from dateutil.relativedelta import relativedelta
 import logging
-from datetime import timedelta
+from datetime import date, timedelta
 
 def compute_return_over_period(
     df: pl.DataFrame,
@@ -64,31 +64,36 @@ def compute_max_drawdown(df: pl.DataFrame) -> float:
     return max_drawdown  # already positive
 
 
-def compute_sector_relative_return(target_df: pl.DataFrame, sector_df: pl.DataFrame, period_days: int, as_of_date: datetime.date) -> float:
-    target_df = target_df.sort("date")
-    sector_df = sector_df.sort("date")
-    past_date = as_of_date - timedelta(days=period_days)
+def compute_sector_relative_return(
+    stock_df: pl.DataFrame,
+    sector_df: pl.DataFrame,
+    lookback_days: int,
+    as_of: date
+) -> float:
+    """
+    Computes the return of the stock relative to its sector over a given lookback period.
+    """
+    cutoff = as_of - timedelta(days=lookback_days)
 
-    def find_price(df):
-        filtered = df.filter(pl.col("date") <= past_date)
-        return filtered[-1, "close"] if not filtered.is_empty() else None
+    stock_df = stock_df.filter((pl.col("date") >= cutoff) & (pl.col("date") <= as_of)).sort("date")
+    sector_df = sector_df.filter((pl.col("date") >= cutoff) & (pl.col("date") <= as_of)).sort("date")
 
-    try:
-        target_now = target_df[-1, "close"]
-        target_past = find_price(target_df)
-        sector_now = sector_df[-1, "close"]
-        sector_past = find_price(sector_df)
-
-        if None in (target_past, sector_past):
-            return 0.0
-
-        target_return = (target_now - target_past) / target_past
-        sector_return = (sector_now - sector_past) / sector_past
-
-        return target_return - sector_return
-    except Exception as e:
-        logging.warning(f"[Sector Relative Return] Computation failed: {e}")
+    if stock_df.height < 2 or sector_df.height < 2:
         return 0.0
+
+    stock_start = stock_df[0, "close"]
+    stock_end = stock_df[-1, "close"]
+    sector_start = sector_df[0, "close"]
+    sector_end = sector_df[-1, "close"]
+
+    if stock_start <= 0 or stock_end <= 0 or sector_start <= 0 or sector_end <= 0:
+        return 0.0
+
+    stock_return = stock_end / stock_start - 1
+    sector_return = sector_end / sector_start - 1
+
+    return stock_return - sector_return
+
 
 
 def compute_payout_ratio(df: pl.DataFrame) -> float:
