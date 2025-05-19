@@ -8,7 +8,7 @@ from src.dataprep.fetcher.sector import fetch_sector_index
 
 
 def fetch_all(ticker: str, div_lookback_years: int, other_lookback_years: int) -> dict:
-    profile =fetch_company_profile(ticker)
+    profile = fetch_company_profile(ticker)
     return {
         "prices": fetch_prices(ticker, lookback_years=div_lookback_years),
         "dividends": fetch_dividends(ticker, lookback_years=div_lookback_years),

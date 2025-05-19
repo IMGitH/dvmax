@@ -2,6 +2,7 @@ from datetime import date
 import polars as pl
 from src.dataprep.report.feature_table import build_feature_table_from_inputs
 
+
 GROUP_PREFIXES = {
     "Price-Based Features": ["6m_", "12m_", "volatility", "max_drawdown"],
     "Fundamentals": ["net_debt", "ebit_"],
@@ -21,7 +22,11 @@ SOURCE_HINTS = {
 def print_feature_report_from_df(df: pl.DataFrame, inputs: dict, as_of: date):
     row = df.row(0, named=True)
     used_keys = set()
-    sector_str = inputs.get("profile", {}).get("sector", "")
+    profile_df = inputs.get("profile")
+    if isinstance(profile_df, pl.DataFrame):
+        sector_str = profile_df["sector"] if "sector" in profile_df.columns else "N/A"
+    else:
+        sector_str = "N/A"
 
     def print_group(title: str, keys: list[str], source_df: pl.DataFrame | None = None):
         print(f"\n→ {title}")

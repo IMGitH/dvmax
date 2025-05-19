@@ -8,9 +8,11 @@ from src.dataprep.features import (
     compute_net_debt_to_ebitda, compute_ebit_interest_cover,
     compute_dividend_cagr, compute_yield_vs_median,
     compute_eps_cagr, compute_fcf_cagr,
-    extract_latest_pe_pfcf, compute_payout_ratio, compute_sector_relative_return,
-    encode_sector
+    extract_latest_pe_pfcf, compute_payout_ratio,
+    compute_sector_relative_return,
+    encode_sector, compute_sma_delta_50_250
 )
+from src.dataprep.fetcher.sector import extract_sector_name
 
 def safe_get(df: pl.DataFrame, col: str, default: float = 0.0) -> float:
     return df[-1, col] if col in df.columns and df.height > 0 else default
@@ -40,7 +42,7 @@ def build_feature_table_from_inputs(ticker: str, inputs: dict, as_of: date) -> p
 
     pe, pfcf = extract_latest_pe_pfcf(ratios)
     if sector_df is not None and not sector_df.is_empty():
-        rel_return = compute_sector_relative_return(prices, sector_df, 180, as_of)
+        rel_return = compute_sector_relative_return(prices, sector_df, 365, as_of)
     else:
         rel_return = 0.0
     features_price = {
@@ -48,7 +50,8 @@ def build_feature_table_from_inputs(ticker: str, inputs: dict, as_of: date) -> p
         "12m_return": compute_12m_return(prices, as_of),
         "volatility": compute_volatility(prices),
         "max_drawdown": compute_max_drawdown(prices),
-        "sector_relative_6m": rel_return
+        "sector_relative_6m": rel_return,
+        "sma_50_200_delta": compute_sma_delta_50_250(prices)
     }
 
     features_fundamentals = {
@@ -75,7 +78,8 @@ def build_feature_table_from_inputs(ticker: str, inputs: dict, as_of: date) -> p
         "payout_ratio": compute_payout_ratio(ratios)
     }
 
-    features_sector = encode_sector(profile.get("sector", ""))
+    sector = extract_sector_name(profile)
+    features_sector = encode_sector(sector)
 
     all_features = {
         "ticker": ticker,

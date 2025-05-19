@@ -1,6 +1,7 @@
 import pytest
 import polars as pl
 import datetime
+from datetime import date, timedelta
 from src.dataprep.features import (
     compute_6m_return, 
     compute_12m_return,
@@ -8,7 +9,8 @@ from src.dataprep.features import (
     compute_max_drawdown, 
     ensure_date_column,
     compute_sector_relative_return,
-    compute_payout_ratio
+    compute_payout_ratio,
+    compute_sma_delta_50_250
 )
 
 # from src.dataprep.features.valuation_features import extract_latest_pe_pfcf
@@ -113,6 +115,7 @@ def test_compute_max_drawdown_larger_range():
     print(f"Computed Drawdown: {result}, Expected: {abs(expected)}")
     assert pytest.approx(result, rel=1e-4) == abs(expected)
 
+
 def test_compute_sector_relative_return_simple_case():
     as_of = datetime.date(2024, 1, 1)
 
@@ -130,6 +133,7 @@ def test_compute_sector_relative_return_simple_case():
     expected = (120/100) - (210/200)
     assert round(result, 4) == round(expected, 4)
 
+
 def test_compute_payout_ratio_basic():
     df = pl.DataFrame({
         "date": ["2021-01-01", "2022-01-01"],
@@ -138,3 +142,27 @@ def test_compute_payout_ratio_basic():
 
     result = compute_payout_ratio(df)
     assert result == 0.4
+
+
+def generate_price_series(start_date: date, num_days: int, start_price: float = 100.0, step: float = 0.1):
+    """Utility to generate dummy price data"""
+    return pl.DataFrame({
+        "date": [start_date + timedelta(days=i) for i in range(num_days)],
+        "close": [start_price + i * step for i in range(num_days)]
+    })
+
+
+def test_compute_sma_delta_with_enough_data():
+    prices = generate_price_series(date(2023, 1, 1), 250)
+    delta = compute_sma_delta_50_250(prices)
+    assert isinstance(delta, float)
+    assert pytest.approx(delta, rel=1e-2) == 0.065
+
+
+def test_compute_sma_delta_handles_zero_division():
+    prices = pl.DataFrame({
+        "date": [date(2023, 1, 1) + timedelta(days=i) for i in range(200)],
+        "close": [0.0 for _ in range(200)]
+    })
+    delta = compute_sma_delta_50_250(prices)
+    assert delta == 0.0

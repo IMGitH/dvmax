@@ -95,10 +95,19 @@ def compute_sector_relative_return(
     return stock_return - sector_return
 
 
-
 def compute_payout_ratio(df: pl.DataFrame) -> float:
     if "payoutRatio" in df.columns:
         valid = df.drop_nulls("payoutRatio").filter(pl.col("payoutRatio") > 0)
         if not valid.is_empty():
             return valid[-1, "payoutRatio"]
     return 0.0
+
+
+def compute_sma_delta_50_250(prices: pl.DataFrame) -> float:
+    # this function computes the difference between the 50-day and 200-day simple moving averages
+    closes = prices.sort("date").select("close").to_series()
+    if len(closes) < 200:
+        raise ValueError("Not enough data to compute SMA delta")
+    sma_50 = closes[-50:].mean()
+    sma_200 = closes[-200:].mean()
+    return (sma_50 - sma_200) / sma_200 if sma_200 != 0 else 0.0
