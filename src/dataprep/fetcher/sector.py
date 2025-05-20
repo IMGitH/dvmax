@@ -1,21 +1,18 @@
 import polars as pl
 from src.dataprep.fetcher.company import fetch_company_profile
 from src.dataprep.fetcher.prices import fetch_prices
+from src.dataprep.fetcher.sector_constants import SECTOR_TO_ETF, SECTOR_NORMALIZATION
 
-SECTOR_TO_ETF = {
-    "Technology": "XLK",
-    "Financial Services": "XLF",
-    "Consumer Cyclical": "XLY",
-    "Consumer Defensive": "XLP",
-    "Energy": "XLE",
-    "Healthcare": "XLV",
-    "Utilities": "XLU",
-    "Industrials": "XLI",
-    "Basic Materials": "XLB",  # sometimes shown as "Materials"
-    "Materials": "XLB",
-    "Real Estate": "XLRE",
-    "Communication Services": "XLC",
-}
+
+def extract_sector_name(profile) -> str:
+    sector = ""
+    if isinstance(profile, pl.DataFrame):
+        if "sector" in profile.columns and profile.height > 0:
+            sector = profile[0, "sector"]
+    elif isinstance(profile, dict):
+        sector = profile.get("sector", "")
+    
+    return SECTOR_NORMALIZATION.get(sector, sector) if sector else ""
 
 def extract_sector_name(profile) -> str:
     if isinstance(profile, pl.DataFrame):
