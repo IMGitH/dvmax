@@ -68,10 +68,10 @@ def test_build_feature_table_from_inputs_minimal():
     assert result.shape[0] == 1
 
     expected_columns = {
-        "ticker", "6m_return", "12m_return", "volatility", "max_drawdown",
+        "ticker", "6m_return", "12m_return", "volatility", "max_drawdown_1y",
         "net_debt_to_ebitda", "ebit_interest_cover", "ebit_interest_cover_capped",
         "eps_cagr_3y", "fcf_cagr_3y",
-        "dividend_cagr_5y", "yield_vs_median",
+        "dividend_cagr_5y", "yield_vs_5y_median",
         "pe_ratio", "pfcf_ratio",
         "sector_technology"
     }

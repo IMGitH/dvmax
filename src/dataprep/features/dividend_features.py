@@ -39,7 +39,7 @@ import datetime
 
 #     return 0.0
 
-def compute_yield_vs_median(df: pl.DataFrame, lookback_years: int, grace_days: int = 45) -> float:
+def compute_yield_vs_median(df: pl.DataFrame, lookback_years: int, grace_days: int = 90) -> float:
     if df.height < 2 or "dividendYield" not in df.columns or "date" not in df.columns:
         return 0.0
 

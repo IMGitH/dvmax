@@ -68,7 +68,7 @@ def test_compute_volatility():
 def test_compute_max_drawdown_basic():
     df = pl.DataFrame({
         "date": ["2023-01-01", "2023-06-01", "2023-12-31"],
-        "close": [100, 150, 90]  # drawdown from 150 to 90
+        "close": [100, 150, 90]
     }).with_columns(
         pl.col("date").str.strptime(pl.Date, "%Y-%m-%d")
     )
@@ -76,7 +76,7 @@ def test_compute_max_drawdown_basic():
     print("\n=== Test Data ===")
     print(df)
 
-    result = compute_max_drawdown(df)
+    result = compute_max_drawdown(df, 1)
 
     expected = (150 - 90) / 150
     print(f"Computed Drawdown: {result}, Expected: {expected}")
@@ -108,7 +108,7 @@ def test_compute_max_drawdown_larger_range():
     print("\n=== Larger Range Test Data ===")
     print(df)
 
-    result = compute_max_drawdown(df)
+    result = compute_max_drawdown(df, 4)
 
     # Expect drawdown from 120 -> 80
     expected = (80 - 120) / 120

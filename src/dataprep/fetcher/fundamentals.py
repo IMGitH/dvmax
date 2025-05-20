@@ -17,8 +17,8 @@ def _fetch_fundamental(endpoint: str, ticker: str, limit: int, period: str = "an
     """
     if period not in {"annual", "quarter"}:
         raise ValueError("Period must be 'annual' or 'quarter'")
-    if not (1 <= limit <= 4):
-        raise ValueError("limit must be between 1 and 4 (FMP free-tier constraint)")
+    if not (1 <= limit <= 5):
+        raise ValueError("limit must be between 1 and 5 (FMP free-tier constraint)")
 
     client = FMPClient()
     params = {"period": period} if period == "quarter" else {}
