@@ -14,8 +14,10 @@ from src.dataprep.features import (
 )
 from src.dataprep.fetcher.sector import extract_sector_name
 
+
 def safe_get(df: pl.DataFrame, col: str, default: float = 0.0) -> float:
     return df[-1, col] if col in df.columns and df.height > 0 else default
+
 
 def build_feature_table_from_inputs(ticker: str, inputs: dict, as_of: date) -> pl.DataFrame:
     # Filter all DataFrames to as_of
@@ -29,8 +31,6 @@ def build_feature_table_from_inputs(ticker: str, inputs: dict, as_of: date) -> p
     dividends = inputs["dividends"]
     ratios    = inputs["ratios"]
     income    = inputs["income"]
-    # "incomeBeforeTax", "interestExpense", "eps", "netIncome", "revenue", "operatingIncome", "grossProfitRatio", 
-    #     "ebitdaratio", "operatingIncomeRatio", "netIncomeRatio", "interestExpense", "depreciationAndAmortization", "weightedAverageShsOut"
     balance   = inputs["balance"]
     profile   = inputs["profile"]
     splits    = inputs["splits"]
@@ -45,11 +45,12 @@ def build_feature_table_from_inputs(ticker: str, inputs: dict, as_of: date) -> p
         rel_return = compute_sector_relative_return(prices, sector_df, 365, as_of)
     else:
         rel_return = 0.0
+
     features_price = {
         "6m_return": compute_6m_return(prices, as_of),
         "12m_return": compute_12m_return(prices, as_of),
         "volatility": compute_volatility(prices),
-        "max_drawdown": compute_max_drawdown(prices),
+        "max_drawdown_1y": compute_max_drawdown(df=prices, lookback_years=1),
         "sector_relative_6m": rel_return,
         "sma_50_200_delta": compute_sma_delta_50_250(prices)
     }
@@ -64,12 +65,12 @@ def build_feature_table_from_inputs(ticker: str, inputs: dict, as_of: date) -> p
         "eps_cagr_3y": compute_eps_cagr(income, years=3),
         "fcf_cagr_3y": compute_fcf_cagr(ratios, years=3),
     }
-    
+
     features_dividends = {
-        "dividend_yield": safe_get(ratios, "dividendYield"), # dividends?
+        "dividend_yield": safe_get(ratios, "dividendYield"),
         "dividend_cagr_3y": compute_dividend_cagr(dividends, splits, years=3),
         "dividend_cagr_5y": compute_dividend_cagr(dividends, splits, years=5),
-        "yield_vs_median": compute_yield_vs_median(ratios, lookback_years=5)
+        "yield_vs_5y_median": compute_yield_vs_median(ratios, lookback_years=5)
     }
 
     features_valuation = {
@@ -92,5 +93,13 @@ def build_feature_table_from_inputs(ticker: str, inputs: dict, as_of: date) -> p
         **features_sector,
         "country": country
     }
+
+    # Add binary flags for nullable metrics
+    nullable_keys = [
+        "eps_cagr_3y", "fcf_cagr_3y",
+        "dividend_yield", "dividend_cagr_3y", "dividend_cagr_5y"
+    ]
+    for key in nullable_keys:
+        all_features[f"has_{key}"] = int(all_features.get(key) is not None)
 
     return pl.DataFrame([all_features])

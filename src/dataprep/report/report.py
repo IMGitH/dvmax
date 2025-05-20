@@ -1,10 +1,11 @@
 from datetime import date
 import polars as pl
-from src.dataprep.report.feature_table import build_feature_table_from_inputs
+from src.dataprep.report.feature_table import \
+    build_feature_table_from_inputs
 
 
 GROUP_PREFIXES = {
-    "Price-Based Features": ["6m_", "12m_", "volatility", "max_drawdown"],
+    "Price-Based Features": ["6m_", "12m_", "volatility", "max_drawdown_1y"],
     "Fundamentals": ["net_debt", "ebit_"],
     "Growth": ["eps_cagr", "fcf_cagr"],
     "Dividends": ["dividend_", "yield_"],
@@ -67,7 +68,7 @@ def print_feature_report_from_df(df: pl.DataFrame, inputs: dict, as_of: date):
 if __name__ == "__main__":
     from src.dataprep.fetcher.fetch_all import fetch_all
     ticker = "AAPL"
-    inputs = fetch_all(ticker, div_lookback_years=5, other_lookback_years=4)
+    inputs = fetch_all(ticker, div_lookback_years=5, other_lookback_years=5)
     df = build_feature_table_from_inputs(ticker, inputs, as_of=date.today())
     print_feature_report_from_df(df, inputs, date.today())
 

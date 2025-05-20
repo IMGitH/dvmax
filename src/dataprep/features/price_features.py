@@ -44,10 +44,19 @@ def compute_volatility(df: pl.DataFrame) -> float:
     return 0.0 if std_dev is None else std_dev * (252 ** 0.5)
 
 
-def compute_max_drawdown(df: pl.DataFrame) -> float:
+def compute_max_drawdown(df: pl.DataFrame, lookback_years: int, grace_days: int = 15) -> float:
     df = ensure_date_column(df, "date").sort("date")
 
     if "close" not in df.columns or df.height < 2:
+        return 0.0
+
+    end_date = df[-1, "date"]
+    start_date = end_date - timedelta(days=365 * lookback_years)
+    grace = timedelta(days=grace_days)
+
+    df = df.filter((pl.col("date") >= start_date - grace) & (pl.col("date") <= end_date))
+
+    if df.height < 2:
         return 0.0
 
     prices = df["close"].to_list()
@@ -61,7 +70,8 @@ def compute_max_drawdown(df: pl.DataFrame) -> float:
         drawdown = (peak - price) / peak
         max_drawdown = max(max_drawdown, drawdown)
 
-    return max_drawdown  # already positive
+    return max_drawdown
+
 
 
 def compute_sector_relative_return(
