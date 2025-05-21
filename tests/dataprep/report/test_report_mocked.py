@@ -63,7 +63,8 @@ def test_print_report_with_mocked_data(
     # Validate presence and correctness of binary flags
     binary_flags = [
         "has_eps_cagr_3y", "has_fcf_cagr_3y",
-        "has_dividend_yield", "has_dividend_cagr_3y", "has_dividend_cagr_5y"
+        "has_dividend_yield", "has_dividend_cagr_3y", "has_dividend_cagr_5y",
+        "has_ebit_interest_cover"
     ]
 
     for col in binary_flags:
