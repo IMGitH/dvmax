@@ -33,7 +33,7 @@ def compute_net_debt_to_ebitda(df: pl.DataFrame) -> pl.DataFrame:
 
 
 def compute_ebit_interest_cover(df: pl.DataFrame, cap: float = 1000.0) -> pl.DataFrame:
-    # Determine which EBIT proxy to use
+    # Choose EBIT source
     if "operatingIncome" in df.columns:
         ebit_col = pl.col("operatingIncome")
     elif "incomeBeforeTax" in df.columns:
@@ -42,20 +42,26 @@ def compute_ebit_interest_cover(df: pl.DataFrame, cap: float = 1000.0) -> pl.Dat
     else:
         raise ValueError("Missing both 'operatingIncome' and 'incomeBeforeTax'. Cannot compute EBIT.")
 
-    # Interest column (fallback to 0 if missing)
-    interest_col = pl.col("interestExpense") if "interestExpense" in df.columns else pl.lit(0.0)
+    # Handle interest expense column
+    interest_col = pl.col("interestExpense") if "interestExpense" in df.columns else pl.lit(None)
 
-    # Raw EBIT / interestExpense ratio (null if division by zero)
-    raw_expr = pl.when(interest_col != 0).then(ebit_col / interest_col).otherwise(None)
+    # Raw EBIT / interest
+    raw_expr = pl.when(interest_col.is_not_null() & (interest_col != 0)) \
+                 .then(ebit_col / interest_col) \
+                 .otherwise(None)
 
-    # Apply cap
+    # Capped EBIT / interest
     capped_expr = pl.when(raw_expr < cap).then(raw_expr).otherwise(np.inf)
 
-    # Cap flag: True if cap was applied (either null or above threshold)
+    # Cap flag
     cap_applied_expr = pl.when(raw_expr.is_null() | (raw_expr >= cap)).then(True).otherwise(False)
+
+    # Validity indicator
+    has_ebit_interest_cover = raw_expr.is_not_null().alias("has_ebit_interest_cover")
 
     return df.with_columns([
         raw_expr.alias("ebit_interest_cover_raw"),
         capped_expr.alias("ebit_interest_cover"),
-        cap_applied_expr.alias("ebit_interest_cover_capped")
+        cap_applied_expr.alias("ebit_interest_cover_capped"),
+        has_ebit_interest_cover
     ])

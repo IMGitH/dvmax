@@ -4,6 +4,8 @@ from datetime import date
 from tests.dataprep.features.test_feature_table import get_random_prices
 from src.dataprep.report.feature_table import build_feature_table_from_inputs
 from src.dataprep.report.report import print_feature_report_from_df
+from src.dataprep.report.feature_table import add_has_flags
+import numpy as np
 
 
 @patch("src.dataprep.fetcher.fetch_all.fetch_prices")
@@ -71,31 +73,27 @@ def test_print_report_with_mocked_data(
 
     print_feature_report_from_df(df, inputs, date.today())  # optional visual
 
-
-def test_has_flags_with_missing_growth_metrics():
-    df = pl.DataFrame([{
-        "ticker": "XYZ",
-        "eps_cagr_3y": None,
-        "fcf_cagr_3y": 0.10,
-        "dividend_yield": None,
-        "dividend_cagr_3y": 0.05,
-        "dividend_cagr_5y": None
-    }])
-
-    # Manually create flags
-    for col in [
-        "eps_cagr_3y", "fcf_cagr_3y",
-        "dividend_yield", "dividend_cagr_3y", "dividend_cagr_5y"
-    ]:
-        df = df.with_columns(pl.col(col).is_not_null().cast(pl.Int8).alias(f"has_{col}"))
-
-    expected = {
-        "has_eps_cagr_3y": 0,
-        "has_fcf_cagr_3y": 1,
-        "has_dividend_yield": 0,
-        "has_dividend_cagr_3y": 1,
-        "has_dividend_cagr_5y": 0
+def test_add_has_flags():
+    feature_row = {
+        "eps_cagr_3y": 0.12,
+        "fcf_cagr_3y": np.nan,
+        "dividend_yield": 0.03,
+        "dividend_cagr_3y": 0.10,
+        "dividend_cagr_5y": 0.16,
+        "ebit_interest_cover": np.nan
     }
 
-    for col, expected_val in expected.items():
-        assert df[0, col] == expected_val, f"{col} expected {expected_val}, got {df[0, col]}"
+    nullable_keys = [
+        "eps_cagr_3y", "fcf_cagr_3y",
+        "dividend_yield", "dividend_cagr_3y", "dividend_cagr_5y",
+        "ebit_interest_cover"
+    ]
+
+    updated = add_has_flags(feature_row.copy(), nullable_keys)
+
+    assert updated["has_eps_cagr_3y"] == 1
+    assert updated["has_fcf_cagr_3y"] == 0
+    assert updated["has_dividend_yield"] == 1
+    assert updated["has_dividend_cagr_3y"] == 1
+    assert updated["has_dividend_cagr_5y"] == 1
+    assert updated["has_ebit_interest_cover"] == 0

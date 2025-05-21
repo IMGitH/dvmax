@@ -32,7 +32,8 @@ EXPECTED_COLUMNS = [
 
     # Binary presence indicators for nullable metrics
     "has_eps_cagr_3y", "has_fcf_cagr_3y",
-    "has_dividend_yield", "has_dividend_cagr_3y", "has_dividend_cagr_5y"
+    "has_dividend_yield", "has_dividend_cagr_3y", "has_dividend_cagr_5y",
+    "has_ebit_interest_cover"
 
     # Note: sector one-hot columns are still dynamic and handled separately
 ]

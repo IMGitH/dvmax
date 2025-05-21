@@ -1,5 +1,6 @@
 import polars as pl
 from datetime import date
+import numpy as np
 
 from src.dataprep.features.price_features import (
     compute_6m_return, compute_12m_return, compute_volatility, compute_max_drawdown
@@ -97,9 +98,24 @@ def build_feature_table_from_inputs(ticker: str, inputs: dict, as_of: date) -> p
     # Add binary flags for nullable metrics
     nullable_keys = [
         "eps_cagr_3y", "fcf_cagr_3y",
-        "dividend_yield", "dividend_cagr_3y", "dividend_cagr_5y"
+        "dividend_yield", "dividend_cagr_3y", "dividend_cagr_5y",
+        "ebit_interest_cover"
     ]
-    for key in nullable_keys:
-        all_features[f"has_{key}"] = int(all_features.get(key) is not None)
+    all_features = add_has_flags(all_features, nullable_keys)
 
     return pl.DataFrame([all_features])
+
+def add_has_flags(feature_row: dict, nullable_keys: list[str]) -> dict:
+    """
+    Adds binary flags to the input dictionary indicating presence (not NaN) of each nullable key.
+
+    Args:
+        feature_row (dict): A dictionary of features with possible NaN values.
+        nullable_keys (list[str]): List of keys to check for presence.
+
+    Returns:
+        dict: Updated dictionary with 'has_' flags added.
+    """
+    for key in nullable_keys:
+        feature_row[f"has_{key}"] = int(not np.isnan(feature_row.get(key, np.nan)))
+    return feature_row
