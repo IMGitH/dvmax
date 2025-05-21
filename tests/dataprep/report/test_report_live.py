@@ -1,4 +1,3 @@
-# tests/test_report_live.py
 import pytest
 import os
 from datetime import date
