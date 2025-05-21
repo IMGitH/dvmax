@@ -1,5 +1,6 @@
 import polars as pl
 import pytest
+import numpy as np
 from src.dataprep.features.growth_features import (
     compute_dividend_cagr, 
     compute_eps_cagr, 
@@ -52,7 +53,7 @@ def test_compute_fcf_cagr_no_split():
 
     expected = (2.0 / 1.0) ** (1 / 3) - 1
     cagr = compute_fcf_cagr(df, 3)
-    assert cagr is not None
+    assert not np.isnan(cagr)
     assert round(cagr, 4) == round(expected, 4)
 
 def test_compute_cagr_returns_none_when_insufficient_data():
@@ -63,7 +64,7 @@ def test_compute_cagr_returns_none_when_insufficient_data():
     }).with_columns(pl.col("date").str.strptime(pl.Date, "%Y-%m-%d"))
 
     result = compute_eps_cagr(df, 3)
-    assert result is None
+    assert np.isnan(result)
 
 
 def test_compute_cagr_returns_none_when_grace_window_misses():
@@ -75,4 +76,4 @@ def test_compute_cagr_returns_none_when_grace_window_misses():
 
     # Looking back 5 years = 2019, but earliest point is 2022
     result = compute_eps_cagr(df, 5)
-    assert result is None
+    assert np.isnan(result)
