@@ -4,6 +4,7 @@ import polars as pl
 import datetime
 import logging
 from src.dataprep.features.utils import adjust_series_for_splits
+import numpy as np
 
 
 def find_value_near_date(
@@ -34,7 +35,7 @@ def compute_cagr_generic(
     grace_months: int = None,
 ) -> float | None:
     if column not in df.columns or df.height < 2:
-        return None
+        return np.nan
 
     df = df.sort("date")
     end_date = df[-1, "date"]
@@ -46,13 +47,13 @@ def compute_cagr_generic(
     )
 
     if start_val is None or start_val <= 0 or end_val <= 0:
-        return None
+        return np.nan
 
     try:
         return (end_val / start_val) ** (1 / years) - 1
     except Exception as e:
         logging.warning(f"[CAGR] Failed to compute CAGR for {column}: {e}")
-        return None
+        return np.nan
 
 
 def compute_dividend_cagr(
@@ -67,7 +68,7 @@ def compute_dividend_cagr(
     df = df.with_columns(pl.col("date").cast(pl.Date)).sort("date")
 
     if df.height < 2:
-        return None
+        return np.nan
 
     df = adjust_series_for_splits(df, splits_df, "dividend", skip_warning=True)
 
@@ -85,6 +86,6 @@ def compute_fcf_cagr(df: pl.DataFrame, years: int) -> float | None:
         col = "fcf"
     else:
         logging.warning("[FCF] No FCF or FCF/share column found.")
-        return None
+        return np.nan
 
     return compute_cagr_generic(df, col, years)
