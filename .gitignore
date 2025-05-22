@@ -5,3 +5,4 @@ data/*/*.png
 *.pyc
 __pycache__/
 output/
+features_parquet/*/*.parquet
