@@ -75,14 +75,41 @@ Use rolling and summary features (not raw time series):
 ---
 
 ### Phase 4: Scoring and Optimization
-
-- Score filtered safe stocks using:
+1. **Filter:** Use the predicted cut probability from Phase 3 to exclude high-risk stocks
+e.g., keep only those with cut_prob < 0.25 (tunable threshold)
+2. **Score:** For remaining “safe” stocks, compute:
   ```
   Final Score = (AdjYield × 0.5) + (DivGrowth × 0.3) + (Stability × 0.2)
   ```
-- Rank and select top 10–30 stocks
+ - Rank and select top 10–30 stocks
+3. **Rank and select:** Choose top 10–30 stocks by Final Score
+
+#### 🔹 AdjYield (Adjusted Dividend Yield)
+- **Definition**: True, sustainable dividend yield.
+- **Computed as**:  
+  `RawYield × (1 − CutProbability)`  
+  or  
+  `RawYield / 5Y Median Yield` (optional valuation normalization)
+- **Purpose**: Filters out unsustainable high yields or dividend traps.
+
+#### 🔹 DivGrowth (Dividend Growth)
+- **Definition**: Dividend compound annual growth rate.
+- **Typical window**: 3–5 years (CAGR), optionally log-scaled or capped.
+- **Optional boost**: Add weight for consistent increase streaks.
+
+#### 🔹 Stability
+- **Definition**: Composite score indicating dividend reliability.
+- **May include**:
+  - `(1 − CutProbability)` — model’s confidence in no cut
+  - Low volatility or drawdown
+  - Low payout and debt ratios
+  - Streaks of uninterrupted payments
+
+### 🧠 Goal
+Favor stocks with strong, growing, and sustainable dividends — and penalize those with elevated cut risk or poor fundamentals.
 
 ---
+
 
 ### Phase 5: Portfolio Construction & Rebalancing
 
