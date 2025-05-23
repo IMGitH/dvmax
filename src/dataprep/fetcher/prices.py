@@ -2,7 +2,7 @@ from typing import Literal
 import polars as pl
 from datetime import datetime, timedelta
 import yfinance as yf
-from src.dataprep.fetcher.base import FMPClient
+from src.dataprep.fetcher.client import fmp_client
 from src.dataprep.fetcher.utils import default_date_range
 
 def fetch_prices(
@@ -28,8 +28,7 @@ def fetch_prices(
         }).with_columns(pl.col("date").cast(pl.Date))
         return df
 
-    client = FMPClient()
-    data = client.fetch(f"historical-price-full/{ticker}", {"from": start_date, "to": end_date}).get("historical", [])
+    data = fmp_client.fetch(f"historical-price-full/{ticker}", {"from": start_date, "to": end_date}).get("historical", [])
     if not data:
         raise RuntimeError(f"No price data from FMP for {ticker}")
     df = pl.DataFrame(data).select(["date", "close"]).with_columns(

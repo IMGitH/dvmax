@@ -2,7 +2,8 @@ import polars as pl
 from datetime import date
 import random
 from datetime import timedelta
-from src.dataprep.report.feature_table import build_feature_table_from_inputs
+from src.dataprep.features.aggregation.feature_table import \
+     build_feature_table_from_inputs
 
 def test_build_feature_table_from_inputs_minimal():
     # Prices with enough history for 6m and 12m return

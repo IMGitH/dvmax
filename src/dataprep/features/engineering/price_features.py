@@ -1,4 +1,5 @@
-from src.dataprep.features.utils import ensure_date_column, find_nearest_price
+from src.dataprep.features.engineering.utils \
+    import ensure_date_column, find_nearest_price
 import polars as pl
 import datetime
 from dateutil.relativedelta import relativedelta

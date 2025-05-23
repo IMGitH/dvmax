@@ -3,7 +3,7 @@ from dateutil.relativedelta import relativedelta
 import polars as pl
 import datetime
 import logging
-from src.dataprep.features.utils import adjust_series_for_splits
+from src.dataprep.features.engineering.utils import adjust_series_for_splits
 import numpy as np
 
 

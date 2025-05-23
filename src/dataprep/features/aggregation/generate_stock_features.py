@@ -9,7 +9,7 @@ import polars as pl
 from tqdm import tqdm
 
 from src.dataprep.fetcher.fetch_all import fetch_all
-from src.dataprep.report.feature_table import build_feature_table_from_inputs
+from src.dataprep.features.aggregation.feature_table import build_feature_table_from_inputs
 
 # === Configuration ===
 AS_OF_DATE = date.today()

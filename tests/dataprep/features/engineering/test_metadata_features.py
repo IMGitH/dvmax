@@ -1,4 +1,4 @@
-from src.dataprep.features import encode_sector
+from src.dataprep.features.engineering import encode_sector
 
 
 def test_encode_sector_one_hot_correctness():

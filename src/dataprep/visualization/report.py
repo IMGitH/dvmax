@@ -1,6 +1,6 @@
 from datetime import date
 import polars as pl
-from src.dataprep.report.feature_table import \
+from src.dataprep.features.aggregation.feature_table import \
     build_feature_table_from_inputs
 
 

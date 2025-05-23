@@ -2,7 +2,7 @@ import pytest
 import polars as pl
 import datetime
 from datetime import date, timedelta
-from src.dataprep.features import (
+from src.dataprep.features.engineering import (
     compute_6m_return, 
     compute_12m_return,
     compute_volatility,

@@ -1,8 +1,8 @@
 from typing import Literal
 import yfinance as yf
 import polars as pl
-from src.dataprep.fetcher.base import FMPClient
 from src.dataprep.fetcher.sector_constants import SECTOR_NORMALIZATION, SECTOR_TO_ETF
+from src.dataprep.fetcher.client import fmp_client
 
 def fetch_company_profile(ticker: str, mode: Literal["auto", "fmp", "yfinance"] = "auto") -> dict:
     if mode == "yfinance":
@@ -10,8 +10,7 @@ def fetch_company_profile(ticker: str, mode: Literal["auto", "fmp", "yfinance"] 
         return info if info else {}
     
     if mode == "fmp":
-        client = FMPClient()
-        data = client.fetch(f"profile/{ticker}")
+        data = fmp_client.fetch(f"profile/{ticker}")
         return data[0] if data else {}
 
     # auto fallback mode

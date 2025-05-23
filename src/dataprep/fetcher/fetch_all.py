@@ -5,11 +5,14 @@ from src.dataprep.fetcher.fundamentals import fetch_balance_sheet_fund, fetch_in
 from src.dataprep.fetcher.company import fetch_company_profile
 from src.dataprep.fetcher.splits import fetch_splits
 from src.dataprep.fetcher.sector import fetch_sector_index
-
+from src.dataprep.fetcher.client import fmp_client
+import logging
 
 def fetch_all(ticker: str, div_lookback_years: int, other_lookback_years: int) -> dict:
+    fmp_client.request_count = 0
+
     profile = fetch_company_profile(ticker)
-    return {
+    result = {
         "prices": fetch_prices(ticker, lookback_years=div_lookback_years),
         "dividends": fetch_dividends(ticker, lookback_years=div_lookback_years),
         "ratios": fetch_ratios(ticker, limit=other_lookback_years),
@@ -19,3 +22,6 @@ def fetch_all(ticker: str, div_lookback_years: int, other_lookback_years: int) -
         "splits": fetch_splits(ticker),
         "sector_index": fetch_sector_index(ticker, limit=other_lookback_years, profile=profile)
     }
+
+    logging.info(f"🔍 Total FMP API requests for ticker {ticker}: {fmp_client.request_count}")
+    return result

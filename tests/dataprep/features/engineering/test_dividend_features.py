@@ -1,6 +1,4 @@
-from src.dataprep.features.dividend_features import (
-    compute_yield_vs_median
-)
+from src.dataprep.features.engineering import compute_yield_vs_median
 import polars as pl
 import pytest
 

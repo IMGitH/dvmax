@@ -1,5 +1,5 @@
 import polars as pl
-from src.dataprep.fetcher.base import FMPClient
+from src.dataprep.fetcher.client import fmp_client
 
 def fetch_ratios(ticker: str, limit:int, period: str = "annual") -> pl.DataFrame:
     """
@@ -22,11 +22,10 @@ def fetch_ratios(ticker: str, limit:int, period: str = "annual") -> pl.DataFrame
     # if not (1 <= limit <= 4):
     #     raise ValueError("limit must be between 1 and 4 (FMP free-tier constraint)")
 
-    client = FMPClient()
     params = {"period": period} if period == "quarter" else {}
 
     try:
-        data = client.fetch(f"ratios/{ticker}", params)
+        data = fmp_client.fetch(f"ratios/{ticker}", params)
     except PermissionError as e:
         print(f"[WARN] {e}")
         return pl.DataFrame()

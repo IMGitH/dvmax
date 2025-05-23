@@ -7,8 +7,9 @@ import polars as pl
 import yfinance as yf
 
 from src.dataprep.fetcher.splits import fetch_splits
-from src.dataprep.fetcher.base import FMPClient
 from src.dataprep.fetcher.utils import default_date_range
+
+from src.dataprep.fetcher.client import fmp_client
 
 def _empty_dividends_df() -> pl.DataFrame:
     """
@@ -83,8 +84,7 @@ def fetch_dividends(
 
     # 3. FMP path
     if mode == "fmp":
-        client = FMPClient()
-        resp = client.fetch(
+        resp = fmp_client.fetch(
             f"historical-price-full/stock_dividend/{ticker}",
             {"from": start_date, "to": end_date}
         )

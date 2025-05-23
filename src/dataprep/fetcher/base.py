@@ -2,6 +2,7 @@ import os
 import time
 import requests
 from dotenv import load_dotenv
+import logging
 
 load_dotenv()
 
@@ -9,6 +10,7 @@ class FMPClient:
     def __init__(self):
         self.api_key = os.getenv("FMP_API_KEY")
         self.base_url = "https://financialmodelingprep.com/api/v3"
+        self.request_count = 0
 
     def fetch(self, endpoint: str, params: dict = {}) -> dict:
         url = f"{self.base_url}/{endpoint}"
@@ -39,5 +41,6 @@ class FMPClient:
 
         # Handle any other non-2xx status codes
         response.raise_for_status()
-
+        self.request_count += 1
+        logging.info(f"Successfully fetched {endpoint} from FMP API.")
         return response.json()

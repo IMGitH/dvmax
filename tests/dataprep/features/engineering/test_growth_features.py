@@ -1,7 +1,7 @@
 import polars as pl
 import pytest
 import numpy as np
-from src.dataprep.features.growth_features import (
+from src.dataprep.features.engineering.growth_features import (
     compute_dividend_cagr, 
     compute_eps_cagr, 
     compute_fcf_cagr,

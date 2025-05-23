@@ -1,5 +1,5 @@
 import polars as pl
-from src.dataprep.fetcher.base import FMPClient
+from src.dataprep.fetcher.client import fmp_client
 
 
 def _fetch_fundamental(endpoint: str, ticker: str, limit: int, period: str = "annual") -> pl.DataFrame:
@@ -20,9 +20,8 @@ def _fetch_fundamental(endpoint: str, ticker: str, limit: int, period: str = "an
     if not (1 <= limit <= 5):
         raise ValueError("limit must be between 1 and 5 (FMP free-tier constraint)")
 
-    client = FMPClient()
     params = {"period": period} if period == "quarter" else {}
-    data = client.fetch(f"{endpoint}/{ticker}", params)
+    data = fmp_client.fetch(f"{endpoint}/{ticker}", params)
     if not data:
         return pl.DataFrame()
 

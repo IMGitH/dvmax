@@ -1,4 +1,4 @@
-from src.dataprep.features.fundamental_features import (
+from src.dataprep.features.engineering.fundamental_features import (
     compute_net_debt_to_ebitda, 
     compute_ebit_interest_cover
 )
