@@ -1,4 +1,3 @@
-import os
 import shutil
 from datetime import date
 from pathlib import Path
@@ -7,7 +6,7 @@ from unittest.mock import patch
 import polars as pl
 import pytest
 
-from src.dataprep.features.aggregation import generate_stock_features as gsf
+from src.dataprep.features.aggregation import batch_runner as gsf
 
 
 @pytest.fixture
@@ -20,8 +19,8 @@ def temp_output_dir(tmp_path):
     shutil.rmtree(gsf.OUTPUT_DIR, ignore_errors=True)
 
 
-@patch("src.dataprep.features.aggregation.generate_stock_features.fetch_all")
-@patch("src.dataprep.features.aggregation.generate_stock_features.build_feature_table_from_inputs")
+@patch("src.dataprep.features.aggregation.batch_runner.fetch_all")
+@patch("src.dataprep.features.aggregation.batch_runner.build_feature_table_from_inputs")
 def test_generate_feature_parquets(mock_build, mock_fetch, tmp_path):
     tickers = ["AAPL", "MSFT"]
     output_dir = tmp_path / "features_parquet"

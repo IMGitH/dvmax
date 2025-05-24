@@ -9,7 +9,9 @@ import polars as pl
 from tqdm import tqdm
 
 from src.dataprep.fetcher.fetch_all import fetch_all
-from src.dataprep.features.aggregation.feature_table import build_feature_table_from_inputs
+from src.dataprep.features.aggregation.row_builder import build_feature_table_from_inputs
+
+from src.dataprep.constants import EXPECTED_COLUMNS
 
 # === Configuration ===
 AS_OF_DATE = date.today()
@@ -23,20 +25,6 @@ MAX_RETRIES = 3
 # Options: "none", "all", "merged"
 OVERWRITE_MODE = os.environ.get("OVERWRITE_MODE", "none").lower()
 
-EXPECTED_COLUMNS = [
-    "ticker", "6m_return", "12m_return", "volatility", "max_drawdown_1y",
-    "sector_relative_6m", "sma_50_200_delta", "net_debt_to_ebitda",
-    "ebit_interest_cover", "ebit_interest_cover_capped", "eps_cagr_3y",
-    "fcf_cagr_3y", "dividend_yield", "dividend_cagr_3y", "dividend_cagr_5y",
-    "yield_vs_5y_median", "pe_ratio", "pfcf_ratio", "payout_ratio", "country",
-
-    # Binary presence indicators for nullable metrics
-    "has_eps_cagr_3y", "has_fcf_cagr_3y",
-    "has_dividend_yield", "has_dividend_cagr_3y", "has_dividend_cagr_5y",
-    "has_ebit_interest_cover"
-
-    # Note: sector one-hot columns are still dynamic and handled separately
-]
 
 def load_tickers(file_path: str) -> List[str]:
     if not os.path.exists(file_path):

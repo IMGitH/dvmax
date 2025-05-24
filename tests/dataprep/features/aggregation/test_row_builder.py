@@ -2,7 +2,7 @@ import polars as pl
 from datetime import date
 import random
 from datetime import timedelta
-from src.dataprep.features.aggregation.feature_table import \
+from src.dataprep.features.aggregation.row_builder import \
      build_feature_table_from_inputs
 
 def test_build_feature_table_from_inputs_minimal():
