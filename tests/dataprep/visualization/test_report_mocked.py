@@ -1,10 +1,10 @@
 import polars as pl
 from unittest.mock import patch
 from datetime import date
-from tests.dataprep.features.engineering.test_feature_table import get_random_prices
-from src.dataprep.features.aggregation.feature_table import build_feature_table_from_inputs
+from tests.dataprep.features.aggregation.test_row_builder import get_random_prices
+from src.dataprep.features.aggregation.row_builder import build_feature_table_from_inputs
 from src.dataprep.visualization.report import print_feature_report_from_df
-from src.dataprep.features.aggregation.feature_table import add_has_flags
+from src.dataprep.features.aggregation.row_builder import add_has_flags
 import numpy as np
 
 

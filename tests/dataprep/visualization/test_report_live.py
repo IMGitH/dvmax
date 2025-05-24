@@ -3,7 +3,7 @@ import os
 from datetime import date
 
 from src.dataprep.fetcher.fetch_all import fetch_all
-from src.dataprep.features.aggregation.feature_table import build_feature_table_from_inputs
+from src.dataprep.features.aggregation.row_builder import build_feature_table_from_inputs
 from src.dataprep.visualization.report import print_feature_report_from_df
 
 @pytest.mark.skipif(not os.getenv("FMP_API_KEY"), reason="FMP_API_KEY not set")

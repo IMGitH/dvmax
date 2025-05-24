@@ -1,24 +1,9 @@
 from datetime import date
 import polars as pl
-from src.dataprep.features.aggregation.feature_table import \
+from src.dataprep.features.aggregation.row_builder import \
     build_feature_table_from_inputs
 
-
-GROUP_PREFIXES = {
-    "Price-Based Features": ["6m_", "12m_", "volatility", "max_drawdown_1y"],
-    "Fundamentals": ["net_debt", "ebit_"],
-    "Growth": ["eps_cagr", "fcf_cagr"],
-    "Dividends": ["dividend_", "yield_"],
-    "Valuation": ["pe_ratio", "pfcf_ratio"],
-    "Sector Encoding": ["sector_"]
-}
-
-SOURCE_HINTS = {
-    "Price-Based Features": "prices",
-    "Dividends": "dividends",
-    "Valuation": "ratios",
-    "Sector Encoding": "profile"
-}
+from src.dataprep.constants import GROUP_PREFIXES, SOURCE_HINTS
 
 def print_feature_report_from_df(df: pl.DataFrame, inputs: dict, as_of: date):
     row = df.row(0, named=True)
