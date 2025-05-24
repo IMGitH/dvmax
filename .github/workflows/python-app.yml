@@ -66,6 +66,7 @@ jobs:
     - name: Save HTML coverage report (optional)
       if: always()
       env:
+        FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
         PYTHONPATH: .
       run: |
         mkdir -p htmlcov
