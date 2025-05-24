@@ -70,8 +70,8 @@ jobs:
         pytest --cov=src --cov-report=html
       continue-on-error: true
 
-    - name: Upload HTML report artifact
-      uses: actions/upload-artifact@v3
-      with:
-        name: coverage-html
-        path: htmlcov/
+#    - name: Upload HTML report artifact
+#      uses: actions/upload-artifact@v3
+#      with:
+#        name: coverage-html
+#        path: htmlcov/
