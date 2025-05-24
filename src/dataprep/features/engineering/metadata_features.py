@@ -1,4 +1,4 @@
-from src.dataprep.fetcher.sector_constants import ALL_SECTORS
+from src.dataprep.constants import ALL_SECTORS
 
 
 def encode_sector(sector: str) -> dict:

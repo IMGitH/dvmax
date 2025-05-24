@@ -1,7 +1,7 @@
 import polars as pl
 from src.dataprep.fetcher.company import fetch_company_profile
 from src.dataprep.fetcher.prices import fetch_prices
-from src.dataprep.fetcher.sector_constants import SECTOR_TO_ETF, SECTOR_NORMALIZATION
+from src.dataprep.constants import SECTOR_TO_ETF, SECTOR_NORMALIZATION
 
 
 def extract_sector_name(profile) -> str:

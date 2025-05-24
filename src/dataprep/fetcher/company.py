@@ -1,7 +1,7 @@
 from typing import Literal
 import yfinance as yf
 import polars as pl
-from src.dataprep.fetcher.sector_constants import SECTOR_NORMALIZATION, SECTOR_TO_ETF
+from src.dataprep.constants import SECTOR_NORMALIZATION, SECTOR_TO_ETF
 from src.dataprep.fetcher.client import fmp_client
 
 def fetch_company_profile(ticker: str, mode: Literal["auto", "fmp", "yfinance"] = "auto") -> dict:
