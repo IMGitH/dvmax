@@ -6,3 +6,4 @@ data/*/*.png
 __pycache__/
 output/
 features_parquet/*/*.parquet
+.coverage
