@@ -94,10 +94,21 @@ def engineer_macro_features(df: pl.DataFrame, as_of: date, country: str, output_
     os.makedirs(output_dir, exist_ok=True)
 
     output_path = os.path.join(output_dir, f"{country.replace(' ', '_').lower()}.parquet")
-    df_feat.write_parquet(output_path)
-    print(f"✅ Saved macro features for {country} to {output_path}")
-    return output_path
 
+    # ✅ Append time series
+    if os.path.exists(output_path):
+        df_existing = pl.read_parquet(output_path)
+
+        # Drop same year if already present
+        if "as_of_year" in df_existing.columns:
+            df_existing = df_existing.filter(pl.col("as_of_year") != as_of.year)
+
+        # Append new row and sort
+        df_feat = pl.concat([df_existing, df_feat], how="vertical").sort("as_of_year")
+
+    df_feat.write_parquet(output_path)
+    print(f"✅ Saved macro features for {country} (as_of={as_of.year}) to {output_path}")
+    return output_path
 
 def fetch_and_save_macro(
     country: str,
@@ -116,7 +127,22 @@ def fetch_and_save_macro(
     df = pl.from_pandas(df_raw.reset_index())
     df = df.with_columns(pl.col("date").cast(pl.Date))
 
-    return engineer_macro_features(df, as_of=date(end_year, 12, 31), country=country, output_root=output_root)
+    last_output_path = None
+
+    # 👇 Loop over multiple years
+    for year in range(start_year + 2, end_year + 1):
+        as_of = date(year, 12, 31)
+        try:
+            last_output_path = engineer_macro_features(
+                df=df,
+                as_of=as_of,
+                country=country,
+                output_root=output_root
+            )
+        except ValueError as e:
+            print(f"[SKIP] {country}@{as_of.year}: {e}")
+    
+    return last_output_path
 
 
 if __name__ == "__main__":
