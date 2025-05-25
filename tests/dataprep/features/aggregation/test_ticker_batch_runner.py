@@ -6,7 +6,7 @@ from unittest.mock import patch
 import polars as pl
 import pytest
 
-from src.dataprep.features.aggregation import batch_runner as gsf
+from src.dataprep.features.aggregation import ticker_batch_runner as gsf
 
 
 @pytest.fixture
@@ -19,7 +19,7 @@ def temp_output_dir(tmp_path):
     shutil.rmtree(gsf.OUTPUT_DIR, ignore_errors=True)
 
 
-@patch("src.dataprep.features.aggregation.batch_runner.fetch_all")
+@patch("src.dataprep.features.aggregation.batch_runner.fetch_all_per_ticker")
 @patch("src.dataprep.features.aggregation.batch_runner.build_feature_table_from_inputs")
 def test_generate_feature_parquets(mock_build, mock_fetch, tmp_path):
     tickers = ["AAPL", "MSFT"]
@@ -36,7 +36,7 @@ def test_generate_feature_parquets(mock_build, mock_fetch, tmp_path):
     gsf.TICKERS_FILE = str(ticker_file)
     gsf.AS_OF_DATE = date(2024, 5, 1)
 
-    # Mock fetch_all to accept any kwargs
+    # Mock fetch_all_per_ticker to accept any kwargs
     def mock_fetch_side_effect(ticker, **kwargs):
         return {"ticker": ticker, "dummy": "data"}
     mock_fetch.side_effect = mock_fetch_side_effect

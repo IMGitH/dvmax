@@ -8,8 +8,8 @@ from pathlib import Path
 import polars as pl
 from tqdm import tqdm
 
-from src.dataprep.fetcher.fetch_all import fetch_all
-from src.dataprep.features.aggregation.row_builder import build_feature_table_from_inputs
+from src.dataprep.fetcher.ticker_data_sources import fetch_all_per_ticker
+from src.dataprep.features.aggregation.ticker_row_builder import build_feature_table_from_inputs
 
 from src.dataprep.constants import EXPECTED_COLUMNS
 
@@ -53,7 +53,7 @@ def save_features(df: pl.DataFrame, ticker: str):
     df.write_parquet(get_parquet_path(ticker))
 
 def fetch_and_build_features(ticker: str) -> pl.DataFrame:
-    inputs = fetch_all(ticker, div_lookback_years=5, other_lookback_years=5)
+    inputs = fetch_all_per_ticker(ticker, div_lookback_years=5, other_lookback_years=5)
     return build_feature_table_from_inputs(ticker, inputs, AS_OF_DATE)
 
 def generate_features_for_ticker(ticker: str):
