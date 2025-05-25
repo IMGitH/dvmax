@@ -54,3 +54,17 @@ EXPECTED_COLUMNS = [
 
     # Note: sector one-hot columns are still dynamic and handled separately
 ]
+
+MACRO_INDICATORS = {
+    "NY.GDP.MKTP.CD": "GDP (USD)",  # Measures total economic output; a shrinking GDP can signal lower corporate earnings and higher cut risk.
+
+    "NY.GDP.PCAP.KD": "GDP per Capita (const USD)",  # Per capita, inflation-adjusted
+
+    "FP.CPI.TOTL.ZG": "Inflation (%)",  # High inflation erodes real cash flow and investor yield, increasing pressure on dividends.
+
+    "SL.UEM.TOTL.ZS": "Unemployment (%)",  # Proxy for recession risk; high unemployment correlates with weak consumption and potential payout suspensions.
+
+    "NE.EXP.GNFS.ZS": "Exports (% GDP)",  # Indicates external demand strength; export-heavy economies may better support dividend-paying firms in downturns.
+
+    "NE.CON.PRVT.ZS": "Private Consumption (% GDP)"  # Reflects domestic consumer demand; weak consumption signals earnings pressure in consumer-driven sectors.
+}

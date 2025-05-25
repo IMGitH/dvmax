@@ -1,5 +1,6 @@
 import requests
 import pandas as pd
+from src.dataprep.constants import MACRO_INDICATORS
 
 class WorldBankAPI:
     BASE_URL = "https://api.worldbank.org/v2"
@@ -19,18 +20,6 @@ class WorldBankAPI:
         return self._country_code_map.get(name)
 
     def fetch_macro_indicators(self, indicator_map, country_name, start=1990, end=2023):
-        """
-        Fetches multiple macroeconomic indicators for a given country and year range.
-
-        Args:
-            indicator_map (dict): {"indicator_code": "human_name"}
-            country_name (str): e.g., "United States"
-            start (int): Start year
-            end (int): End year
-
-        Returns:
-            pd.DataFrame with columns = human_name, index = datetime(year)
-        """
         code = self.get_country_code(country_name)
         if not code:
             raise ValueError(f"❌ Country not found: {country_name}")
@@ -52,22 +41,3 @@ class WorldBankAPI:
 
         result = pd.concat(dfs, axis=1).sort_index()
         return result
-
-if __name__ == "__main__":
-    macro = WorldBankAPI()
-
-    indicators = {
-        "NY.GDP.MKTP.CD": "GDP (USD)",  # Measures total economic output; a shrinking GDP can signal lower corporate earnings and higher cut risk.
-
-        "FP.CPI.TOTL.ZG": "Inflation (%)",  # High inflation erodes real cash flow and investor yield, increasing pressure on dividends.
-
-        "SL.UEM.TOTL.ZS": "Unemployment (%)",  # Proxy for recession risk; high unemployment correlates with weak consumption and potential payout suspensions.
-
-        "NE.EXP.GNFS.ZS": "Exports (% GDP)",  # Indicates external demand strength; export-heavy economies may better support dividend-paying firms in downturns.
-
-        "NE.CON.PRVT.ZS": "Private Consumption (% GDP)"  # Reflects domestic consumer demand; weak consumption signals earnings pressure in consumer-driven sectors.
-    }
-
-    df_macro = macro.fetch_macro_indicators(indicators, "United States", start=2000, end=2023)
-
-    print(df_macro.tail())

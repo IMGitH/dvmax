@@ -1,6 +1,6 @@
 from datetime import date
 import polars as pl
-from src.dataprep.features.aggregation.row_builder import \
+from src.dataprep.features.aggregation.ticker_row_builder import \
     build_feature_table_from_inputs
 
 from src.dataprep.constants import GROUP_PREFIXES, SOURCE_HINTS
@@ -51,9 +51,8 @@ def print_feature_report_from_df(df: pl.DataFrame, inputs: dict, as_of: date):
 
 
 if __name__ == "__main__":
-    from src.dataprep.fetcher.fetch_all import fetch_all
+    from src.dataprep.fetcher.ticker_data_sources import fetch_all_per_ticker
     ticker = "AAPL"
-    inputs = fetch_all(ticker, div_lookback_years=5, other_lookback_years=5)
+    inputs = fetch_all_per_ticker(ticker, div_lookback_years=5, other_lookback_years=5)
     df = build_feature_table_from_inputs(ticker, inputs, as_of=date.today())
     print_feature_report_from_df(df, inputs, date.today())
-
