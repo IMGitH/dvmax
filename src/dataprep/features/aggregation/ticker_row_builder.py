@@ -13,7 +13,7 @@ from src.dataprep.features.engineering import (
     compute_sector_relative_return,
     encode_sector, compute_sma_delta_50_250
 )
-from src.dataprep.fetcher.sector import extract_sector_name
+from src.dataprep.fetcher.ticker_params.sector import extract_sector_name
 
 
 def safe_get(df: pl.DataFrame, col: str, default: float = 0.0) -> float:

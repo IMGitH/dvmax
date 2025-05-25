@@ -1,6 +1,5 @@
 import requests
 import pandas as pd
-from src.dataprep.constants import MACRO_INDICATORS
 
 class WorldBankAPI:
     BASE_URL = "https://api.worldbank.org/v2"

@@ -6,7 +6,7 @@ from typing import Literal
 import polars as pl
 import yfinance as yf
 
-from src.dataprep.fetcher.splits import fetch_splits
+from src.dataprep.fetcher.ticker_params.splits import fetch_splits
 from src.dataprep.fetcher.utils import default_date_range
 
 from src.dataprep.fetcher.client import fmp_client
