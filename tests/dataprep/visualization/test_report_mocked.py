@@ -1,20 +1,20 @@
 import polars as pl
 from unittest.mock import patch
 from datetime import date
-from tests.dataprep.features.aggregation.test_row_builder import get_random_prices
-from src.dataprep.features.aggregation.row_builder import build_feature_table_from_inputs
+from tests.dataprep.features.aggregation.test_ticker_row_builder import get_random_prices
+from src.dataprep.features.aggregation.ticker_row_builder import build_feature_table_from_inputs
 from src.dataprep.visualization.report import print_feature_report_from_df
-from src.dataprep.features.aggregation.row_builder import add_has_flags
+from src.dataprep.features.aggregation.ticker_row_builder import add_has_flags
 import numpy as np
 
 
-@patch("src.dataprep.fetcher.fetch_all.fetch_prices")
-@patch("src.dataprep.fetcher.fetch_all.fetch_dividends")
-@patch("src.dataprep.fetcher.fetch_all.fetch_ratios")
-@patch("src.dataprep.fetcher.fetch_all.fetch_balance_sheet_fund")
-@patch("src.dataprep.fetcher.fetch_all.fetch_income_statement_fund")
-@patch("src.dataprep.fetcher.fetch_all.fetch_company_profile")
-@patch("src.dataprep.fetcher.fetch_all.fetch_splits")
+@patch("src.dataprep.fetcher.fetch_all_per_ticker.fetch_prices")
+@patch("src.dataprep.fetcher.fetch_all_per_ticker.fetch_dividends")
+@patch("src.dataprep.fetcher.fetch_all_per_ticker.fetch_ratios")
+@patch("src.dataprep.fetcher.fetch_all_per_ticker.fetch_balance_sheet_fund")
+@patch("src.dataprep.fetcher.fetch_all_per_ticker.fetch_income_statement_fund")
+@patch("src.dataprep.fetcher.fetch_all_per_ticker.fetch_company_profile")
+@patch("src.dataprep.fetcher.fetch_all_per_ticker.fetch_splits")
 def test_print_report_with_mocked_data(
     mock_splits, mock_profile, mock_income, mock_balance,
     mock_ratios, mock_dividends, mock_prices
@@ -56,8 +56,8 @@ def test_print_report_with_mocked_data(
         "country": "United States",
     }
 
-    from src.dataprep.fetcher.fetch_all import fetch_all
-    inputs = fetch_all("MOCK", div_lookback_years=5, other_lookback_years=5)
+    from src.dataprep.fetcher.ticker_data_sources import fetch_all_per_ticker
+    inputs = fetch_all_per_ticker("MOCK", div_lookback_years=5, other_lookback_years=5)
     df = build_feature_table_from_inputs("MOCK", inputs, as_of=date.today())
 
     # Validate presence and correctness of binary flags
