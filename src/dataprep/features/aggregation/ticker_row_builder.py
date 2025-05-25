@@ -35,7 +35,6 @@ def build_feature_table_from_inputs(ticker: str, inputs: dict, as_of: date) -> p
     profile   = inputs["profile"]
     splits    = inputs["splits"]
     sector_df = inputs.get("sector_index", None)
-    macro     = inputs.get("macro", None)
 
     df_fundamentals = income.join(balance, on="date", how="inner")
     df_fundamentals = compute_net_debt_to_ebitda(df_fundamentals)
@@ -84,16 +83,6 @@ def build_feature_table_from_inputs(ticker: str, inputs: dict, as_of: date) -> p
     country = profile.get("country", "N/A")
     features_sector = encode_sector(sector)
 
-    features_macro = {}
-    if isinstance(macro, pl.DataFrame) and not macro.empty:
-        latest_macro = macro.sort_index().iloc[-1]
-        features_macro = {
-            "gdp_usd": latest_macro.get("GDP (USD)", np.nan),
-            "inflation_pct": latest_macro.get("Inflation (%)", np.nan),
-            "unemployment_pct": latest_macro.get("Unemployment (%)", np.nan),
-            "exports_pct_gdp": latest_macro.get("Exports (% GDP)", np.nan),
-            "private_cons_pct_gdp": latest_macro.get("Private Consumption (% GDP)", np.nan)
-        }
 
     all_features = {
         "ticker": ticker,
@@ -102,7 +91,6 @@ def build_feature_table_from_inputs(ticker: str, inputs: dict, as_of: date) -> p
         **features_growth,
         **features_dividends,
         **features_valuation,
-        **features_macro,
         **features_sector,
         "country": country
     }
