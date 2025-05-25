@@ -6,4 +6,5 @@ data/*/*.png
 __pycache__/
 output/
 features_parquet/*/*.parquet
+features_parquet/*/macro/united_states.parquet
 .coverage

@@ -17,7 +17,7 @@ from src.dataprep.constants import EXPECTED_COLUMNS
 AS_OF_DATE = date.today()
 DATE_STR = AS_OF_DATE.strftime("%d-%m-%Y")
 OUTPUT_DIR = os.path.join("features_parquet", DATE_STR)
-MERGED_FILE = os.path.join(OUTPUT_DIR, "features_all.parquet")
+MERGED_FILE = os.path.join(OUTPUT_DIR, "features_all_tickers.parquet")
 TICKERS_FILE = "us_tickers_subset.txt"  # or "us_tickers.txt"
 SLEEP_BETWEEN_CALLS = 1.0  # seconds
 MAX_RETRIES = 3

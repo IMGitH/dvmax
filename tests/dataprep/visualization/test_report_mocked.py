@@ -8,13 +8,13 @@ from src.dataprep.features.aggregation.ticker_row_builder import add_has_flags
 import numpy as np
 
 
-@patch("src.dataprep.fetcher.fetch_all_per_ticker.fetch_prices")
-@patch("src.dataprep.fetcher.fetch_all_per_ticker.fetch_dividends")
-@patch("src.dataprep.fetcher.fetch_all_per_ticker.fetch_ratios")
-@patch("src.dataprep.fetcher.fetch_all_per_ticker.fetch_balance_sheet_fund")
-@patch("src.dataprep.fetcher.fetch_all_per_ticker.fetch_income_statement_fund")
-@patch("src.dataprep.fetcher.fetch_all_per_ticker.fetch_company_profile")
-@patch("src.dataprep.fetcher.fetch_all_per_ticker.fetch_splits")
+@patch("src.dataprep.fetcher.ticker_data_sources.fetch_prices")
+@patch("src.dataprep.fetcher.ticker_data_sources.fetch_dividends")
+@patch("src.dataprep.fetcher.ticker_data_sources.fetch_ratios")
+@patch("src.dataprep.fetcher.ticker_data_sources.fetch_balance_sheet_fund")
+@patch("src.dataprep.fetcher.ticker_data_sources.fetch_income_statement_fund")
+@patch("src.dataprep.fetcher.ticker_data_sources.fetch_company_profile")
+@patch("src.dataprep.fetcher.ticker_data_sources.fetch_splits")
 def test_print_report_with_mocked_data(
     mock_splits, mock_profile, mock_income, mock_balance,
     mock_ratios, mock_dividends, mock_prices

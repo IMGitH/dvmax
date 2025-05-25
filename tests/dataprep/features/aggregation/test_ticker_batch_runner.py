@@ -13,22 +13,23 @@ from src.dataprep.features.aggregation import ticker_batch_runner as gsf
 def temp_output_dir(tmp_path):
     # Override global variables for test isolation
     gsf.OUTPUT_DIR = str(tmp_path / "features_parquet")
-    gsf.MERGED_FILE = str(tmp_path / "features_parquet" / "features_all.parquet")
+    gsf.MERGED_FILE = str(tmp_path / "features_parquet" / "features_all_tickers.parquet")
     gsf.AS_OF_DATE = date(2024, 5, 1)
     yield tmp_path
     shutil.rmtree(gsf.OUTPUT_DIR, ignore_errors=True)
 
 
-@patch("src.dataprep.features.aggregation.batch_runner.fetch_all_per_ticker")
-@patch("src.dataprep.features.aggregation.batch_runner.build_feature_table_from_inputs")
+@patch("src.dataprep.features.aggregation.ticker_batch_runner.fetch_all_per_ticker")
+@patch("src.dataprep.features.aggregation.ticker_batch_runner.build_feature_table_from_inputs")
 def test_generate_feature_parquets(mock_build, mock_fetch, tmp_path):
+
     tickers = ["AAPL", "MSFT"]
     output_dir = tmp_path / "features_parquet"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Override config
     gsf.OUTPUT_DIR = str(output_dir)
-    gsf.MERGED_FILE = str(output_dir / "features_all.parquet")
+    gsf.MERGED_FILE = str(output_dir / "features_all_tickers.parquet")
     gsf.OVERWRITE_MODE = "all"
 
     ticker_file = tmp_path / "tickers.txt"
@@ -39,9 +40,10 @@ def test_generate_feature_parquets(mock_build, mock_fetch, tmp_path):
     # Mock fetch_all_per_ticker to accept any kwargs
     def mock_fetch_side_effect(ticker, **kwargs):
         return {"ticker": ticker, "dummy": "data"}
+
     mock_fetch.side_effect = mock_fetch_side_effect
 
-    # Mock build_feature_table_from_inputs based on ticker
+    # Mock build_feature_table_from_inputs with controlled differentiation
     def mock_build_side_effect(ticker, inputs, as_of):
         is_msft = ticker == "MSFT"
         return pl.DataFrame({
@@ -72,27 +74,36 @@ def test_generate_feature_parquets(mock_build, mock_fetch, tmp_path):
             "has_dividend_cagr_5y": [1],
             "has_ebit_interest_cover": [1],
         })
+
     mock_build.side_effect = mock_build_side_effect
 
     # Run the actual pipeline
     gsf.main()
 
-    # Validate individual files
+    # Validate individual output files
     for ticker in tickers:
         path = Path(gsf.OUTPUT_DIR) / f"{ticker}.parquet"
         assert path.exists(), f"{path} was not created"
 
-    # Validate merged file
+    # Validate merged output file
     merged_path = Path(gsf.MERGED_FILE)
     assert merged_path.exists(), "Merged parquet file was not created"
+
     merged_df = pl.read_parquet(merged_path)
-
-    # Validate both tickers are in the merged file
     found_tickers = merged_df["ticker"].unique().to_list()
-    assert sorted(found_tickers) == sorted(tickers), f"Unexpected tickers: {found_tickers}"
 
-    # Confirm data is not duplicated and is ticker-specific
+    # Confirm correct tickers
+    assert sorted(found_tickers) == sorted(tickers), f"Unexpected tickers in merged file: {found_tickers}"
+
+    # Confirm row count = # of tickers
+    assert merged_df.shape[0] == len(tickers), f"Unexpected number of rows: {merged_df.shape[0]}"
+
+    # Confirm data is differentiated
     msft_row = merged_df.filter(pl.col("ticker") == "MSFT")
     aapl_row = merged_df.filter(pl.col("ticker") == "AAPL")
+
     assert msft_row["6m_return"][0] == 0.15
     assert aapl_row["6m_return"][0] == 0.1
+
+    # Optional debug output
+    print("🧪 Merged DataFrame:\n", merged_df)
