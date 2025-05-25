@@ -10,21 +10,33 @@ from tqdm import tqdm
 
 from src.dataprep.fetcher.ticker_data_sources import fetch_all_per_ticker
 from src.dataprep.features.aggregation.ticker_row_builder import build_feature_table_from_inputs
-
 from src.dataprep.constants import EXPECTED_COLUMNS
 
 # === Configuration ===
-AS_OF_DATE = date.today()
-DATE_STR = AS_OF_DATE.strftime("%d-%m-%Y")
-OUTPUT_DIR = os.path.join("features_parquet", DATE_STR)
-MERGED_FILE = os.path.join(OUTPUT_DIR, "features_all_tickers.parquet")
-TICKERS_FILE = "us_tickers_subset.txt"  # or "us_tickers.txt"
-SLEEP_BETWEEN_CALLS = 1.0  # seconds
-MAX_RETRIES = 3
+# START_DATE = date(2020, 12, 31)  # <-- adjust your backtesting start
+START_DATE = date(2024, 1, 1)  # <-- adjust your backtesting start
 
-# Options: "none", "all", "merged"
+END_DATE = date.today().replace(month=12, day=31)  # e.g. last full year
+FREQ = "1Y"  # or use month intervals via custom date generation
+
+OUTPUT_DIR = "features_parquet/timeseries"
+TICKERS_FILE = "us_tickers_subset.txt"
+SLEEP_BETWEEN_CALLS = 1.0
+MAX_RETRIES = 3
 OVERWRITE_MODE = os.environ.get("OVERWRITE_MODE", "none").lower()
 
+DATE_STR = date.today().strftime("%d-%m-%Y")
+OUTPUT_DIR = os.path.join("features_parquet", DATE_STR, "tickers_data")
+
+# === Utilities ===
+
+def get_dates_between(start: date, end: date, freq: str = "1Y") -> List[date]:
+    current = start
+    dates = []
+    while current <= end:
+        dates.append(current)
+        current = current.replace(year=current.year + 1)
+    return dates
 
 def load_tickers(file_path: str) -> List[str]:
     if not os.path.exists(file_path):
@@ -35,48 +47,103 @@ def load_tickers(file_path: str) -> List[str]:
 def ensure_output_dir():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-def get_parquet_path(ticker: str) -> str:
-    return os.path.join(OUTPUT_DIR, f"{ticker}.parquet")
-
-def should_skip(ticker: str) -> bool:
-    if OVERWRITE_MODE == "all":
-        return False
-    return os.path.exists(get_parquet_path(ticker))
-
 def validate_schema(df: pl.DataFrame, ticker: str):
     missing = [col for col in EXPECTED_COLUMNS if col not in df.columns]
     if missing:
         raise ValueError(f"[SCHEMA] {ticker} missing columns: {missing}")
 
-def save_features(df: pl.DataFrame, ticker: str):
-    validate_schema(df, ticker)
-    df.write_parquet(get_parquet_path(ticker))
 
-def fetch_and_build_features(ticker: str) -> pl.DataFrame:
+def get_parquet_path(ticker: str) -> str:
+    return os.path.join(OUTPUT_DIR, f"{ticker}.parquet")
+
+
+def fill_missing_columns(df: pl.DataFrame, all_columns: List[str]) -> pl.DataFrame:
+    for col in all_columns:
+        if col not in df.columns:
+            df = df.with_columns(pl.lit(None).alias(col))
+    return df.select(all_columns)  # reorder consistently
+
+
+def save_or_append(df: pl.DataFrame, ticker: str):
+    if not isinstance(df, pl.DataFrame):
+        raise TypeError(f"[BUG] df is not a Polars DataFrame for {ticker}. Got: {type(df)}")
+    
+    if "as_of" not in df.columns:
+        raise ValueError(f"[BUG] 'as_of' missing in new df for {ticker}. Got columns: {df.columns}")
+
+    path = get_parquet_path(ticker)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+
+    if os.path.exists(path):
+        df_existing = pl.read_parquet(path)
+        if "as_of" not in df_existing.columns:
+            raise ValueError(f"[BUG] 'as_of' missing in existing file for {ticker}. Columns: {df_existing.columns}")
+        df = pl.concat([df_existing, df], how="vertical").unique(subset=["as_of"])
+
+    df.write_parquet(path)
+    print(f"💾 Saved: {ticker} ({df.height} rows) → {path}")
+
+
+
+def fetch_and_build_features(ticker: str, as_of: date) -> pl.DataFrame:
     inputs = fetch_all_per_ticker(ticker, div_lookback_years=5, other_lookback_years=5)
-    return build_feature_table_from_inputs(ticker, inputs, AS_OF_DATE)
+    if not has_enough_price_data(inputs, as_of):
+        raise ValueError("Not enough price data available for required historical features")
+    df = build_feature_table_from_inputs(ticker, inputs, as_of)
+    if not isinstance(df, pl.DataFrame):
+        raise TypeError(f"[BUG] build_feature_table_from_inputs did not return a Polars DataFrame for {ticker}@{as_of} — got {type(df)}")
+    if df.is_empty():
+        raise ValueError(f"[WARN] build_feature_table_from_inputs returned empty df for {ticker}@{as_of}")
+    df = df.with_columns([
+        pl.lit(ticker).alias("ticker"),
+        pl.lit(as_of).cast(pl.Date).alias("as_of")
+    ])
+    df = df.select(["ticker", "as_of"] + [col for col in df.columns if col not in ("ticker", "as_of")])
+    return df
 
-def generate_features_for_ticker(ticker: str):
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            if should_skip(ticker):
-                return f"[SKIP] {ticker} already exists."
 
-            df = fetch_and_build_features(ticker)
-            if df.is_empty():
-                return f"[WARN] No data for {ticker}"
+def generate_features_for_ticker(ticker: str, all_dates: List[date]):
+    results = []
+    for as_of in all_dates:
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                df = fetch_and_build_features(ticker, as_of)
+                if df.is_empty():
+                    results.append(f"[WARN] No data for {ticker} on {as_of}")
+                    break
+                save_or_append(df, ticker)
+                results.append(f"[OK] {ticker} on {as_of}")
+                break  # ✅ exit retry loop
 
-            save_features(df, ticker)
-            return f"[OK] {ticker}"
+            except ValueError as ve:
+                if "Not enough" in str(ve):
+                    results.append(f"[SKIP] {ticker}@{as_of}: {ve}")
+                    break
+                if attempt < MAX_RETRIES:
+                    print(f"[RETRY] {ticker}@{as_of} (attempt {attempt}) – {ve}")
+                    time.sleep(2 * attempt)
+                else:
+                    results.append(f"[FAIL] {ticker}@{as_of} after {MAX_RETRIES} attempts: {ve}")
+                    break
 
-        except Exception as e:
-            if attempt < MAX_RETRIES:
-                print(f"[RETRY] {ticker} (attempt {attempt}) – {e}")
-                time.sleep(2 * attempt)
-            else:
-                print(f"[FAIL] {ticker} after {MAX_RETRIES} attempts: {e}")
-                traceback.print_exc()
-                return f"[FAIL] {ticker}"
+            except Exception as e:
+                if attempt < MAX_RETRIES:
+                    print(f"[RETRY] {ticker}@{as_of} (attempt {attempt}) – {e}")
+                    time.sleep(2 * attempt)
+                else:
+                    print(f"[FAIL] {ticker}@{as_of} after {MAX_RETRIES} attempts: {e}")
+                    traceback.print_exc()
+                    results.append(f"[FAIL] {ticker}@{as_of}")
+                    break
+
+    return "\n".join(results)
+
+def has_enough_price_data(inputs: dict, as_of: date, required_days: int = 260) -> bool:
+    if "prices" not in inputs:
+        return False
+    df = inputs["prices"]
+    return df.filter(pl.col("date") <= pl.lit(as_of)).height >= required_days
+
 
 def merge_all_feature_vectors():
     paths = sorted(Path(OUTPUT_DIR).glob("*.parquet"))
@@ -87,24 +154,29 @@ def merge_all_feature_vectors():
     dfs = [pl.read_parquet(p).cast(ref_schema) for p in paths]
     merged_df = pl.concat(dfs, how="vertical")
 
-    if OVERWRITE_MODE in ("all", "merged") or not os.path.exists(MERGED_FILE):
-        merged_df.write_parquet(MERGED_FILE)
-        print(f"✅ Merged {len(paths)} files into {MERGED_FILE}")
+    merged_file = os.path.join(OUTPUT_DIR, "features_all_tickers_timeseries.parquet")
+    if OVERWRITE_MODE in ("all", "merged") or not os.path.exists(merged_file):
+        merged_df.write_parquet(merged_file)
+        print(f"✅ Merged {len(paths)} files into {merged_file}")
     else:
-        print(f"⏩ Skipped merging – {MERGED_FILE} already exists.")
+        print(f"⏩ Skipped merging – file already exists.")
+
 
 def main():
     ensure_output_dir()
     tickers = load_tickers(TICKERS_FILE)
-    print(f"🟢 Generating features for {len(tickers)} tickers (as of {AS_OF_DATE})...")
+    all_dates = get_dates_between(START_DATE, END_DATE)
+    print(f"🟢 Generating features for {len(tickers)} tickers × {len(all_dates)} dates...")
 
     for ticker in tqdm(tickers, desc="Processing tickers"):
-        message = generate_features_for_ticker(ticker)
+        message = generate_features_for_ticker(ticker, all_dates)
         if message:
             tqdm.write(message)
         time.sleep(SLEEP_BETWEEN_CALLS)
 
     merge_all_feature_vectors()
+    print(f"All dates generated: {[d.isoformat() for d in get_dates_between(START_DATE, END_DATE)]}")
+
 
 if __name__ == "__main__":
     main()
