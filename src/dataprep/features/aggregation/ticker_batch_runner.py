@@ -25,8 +25,7 @@ SLEEP_BETWEEN_CALLS = 1.0
 MAX_RETRIES = 3
 OVERWRITE_MODE = os.environ.get("OVERWRITE_MODE", "none").lower()
 
-DATE_STR = date.today().strftime("%d-%m-%Y")
-OUTPUT_DIR = os.path.join("features_parquet", DATE_STR, "tickers_data")
+OUTPUT_DIR = os.path.join("features_parquet", "tickers_data")
 
 # === Utilities ===
 
@@ -61,28 +60,32 @@ def fill_missing_columns(df: pl.DataFrame, all_columns: List[str]) -> pl.DataFra
     for col in all_columns:
         if col not in df.columns:
             df = df.with_columns(pl.lit(None).alias(col))
-    return df.select(all_columns)  # reorder consistently
+    return df.select(all_columns)
 
 
-def save_or_append(df: pl.DataFrame, ticker: str):
+
+def save_or_append(df: pl.DataFrame, ticker: str, merge_with_existing: bool = True):
     if not isinstance(df, pl.DataFrame):
         raise TypeError(f"[BUG] df is not a Polars DataFrame for {ticker}. Got: {type(df)}")
-    
+
     if "as_of" not in df.columns:
-        raise ValueError(f"[BUG] 'as_of' missing in new df for {ticker}. Got columns: {df.columns}")
+        raise ValueError(f"[BUG] 'as_of' missing in df for {ticker}. Got columns: {df.columns}")
 
     path = get_parquet_path(ticker)
     os.makedirs(os.path.dirname(path), exist_ok=True)
 
-    if os.path.exists(path):
+    if merge_with_existing and os.path.exists(path):
         df_existing = pl.read_parquet(path)
-        if "as_of" not in df_existing.columns:
-            raise ValueError(f"[BUG] 'as_of' missing in existing file for {ticker}. Columns: {df_existing.columns}")
+
+        # Ensure both have same schema
+        all_columns = sorted(set(df.columns) | set(df_existing.columns))
+        df_existing = fill_missing_columns(df_existing, all_columns)
+        df = fill_missing_columns(df, all_columns)
+
         df = pl.concat([df_existing, df], how="vertical").unique(subset=["as_of"])
 
     df.write_parquet(path)
     print(f"💾 Saved: {ticker} ({df.height} rows) → {path}")
-
 
 
 def fetch_and_build_features(ticker: str, as_of: date) -> pl.DataFrame:
@@ -103,7 +106,9 @@ def fetch_and_build_features(ticker: str, as_of: date) -> pl.DataFrame:
 
 
 def generate_features_for_ticker(ticker: str, all_dates: List[date]):
+    collected = []
     results = []
+
     for as_of in all_dates:
         for attempt in range(1, MAX_RETRIES + 1):
             try:
@@ -111,9 +116,9 @@ def generate_features_for_ticker(ticker: str, all_dates: List[date]):
                 if df.is_empty():
                     results.append(f"[WARN] No data for {ticker} on {as_of}")
                     break
-                save_or_append(df, ticker)
+                collected.append(df)
                 results.append(f"[OK] {ticker} on {as_of}")
-                break  # ✅ exit retry loop
+                break
 
             except ValueError as ve:
                 if "Not enough" in str(ve):
@@ -136,7 +141,12 @@ def generate_features_for_ticker(ticker: str, all_dates: List[date]):
                     results.append(f"[FAIL] {ticker}@{as_of}")
                     break
 
+    if collected:
+        full_df = pl.concat(collected, how="vertical").unique(subset=["as_of"])
+        save_or_append(full_df, ticker, merge_with_existing=True)
+
     return "\n".join(results)
+
 
 def has_enough_price_data(inputs: dict, as_of: date, required_days: int = 260) -> bool:
     if "prices" not in inputs:
@@ -150,9 +160,41 @@ def merge_all_feature_vectors():
     if not paths:
         raise RuntimeError("No feature vector files found.")
 
-    ref_schema = pl.read_parquet(paths[0]).schema
-    dfs = [pl.read_parquet(p).cast(ref_schema) for p in paths]
+    # Determine superset of all columns
+    all_columns = set()
+    for path in paths:
+        df = pl.read_parquet(path)
+        all_columns.update(df.columns)
+    all_columns = sorted(all_columns)
+
+    dfs = []
+    for path in paths:
+        df = pl.read_parquet(path)
+        df = fill_missing_columns(df, all_columns)
+
+        # Enforce consistent dtypes (float for all numerics)
+        schema = {}
+        for col in df.columns:
+            dtype = df[col].dtype
+            if dtype in [pl.Int8, pl.Int16, pl.Int32, pl.Int64]:
+                schema[col] = pl.Float64
+            elif dtype in [pl.Utf8, pl.Boolean, pl.Float64, pl.Date]:
+                schema[col] = dtype
+            else:
+                schema[col] = pl.Float64  # fallback to float
+
+        df = df.cast(schema)
+        dfs.append(df)
+
     merged_df = pl.concat(dfs, how="vertical")
+
+    merged_file = os.path.join(OUTPUT_DIR, "features_all_tickers_timeseries.parquet")
+    if OVERWRITE_MODE in ("all", "merged") or not os.path.exists(merged_file):
+        merged_df.write_parquet(merged_file)
+        print(f"✅ Merged {len(paths)} files into {merged_file}")
+    else:
+        print(f"⏩ Skipped merging – file already exists.")
+
 
     merged_file = os.path.join(OUTPUT_DIR, "features_all_tickers_timeseries.parquet")
     if OVERWRITE_MODE in ("all", "merged") or not os.path.exists(merged_file):

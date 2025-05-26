@@ -89,8 +89,7 @@ def engineer_macro_features(df: pl.DataFrame, as_of: date, country: str, output_
 
 
     # === Save to file ===
-    today_str = date.today().strftime('%d-%m-%Y')
-    output_dir = os.path.join(output_root, today_str, "macro")
+    output_dir = os.path.join(output_root, "macro")
     os.makedirs(output_dir, exist_ok=True)
 
     output_path = os.path.join(output_dir, f"{country.replace(' ', '_').lower()}.parquet")
