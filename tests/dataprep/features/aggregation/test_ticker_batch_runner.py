@@ -12,8 +12,8 @@ from src.dataprep.features.aggregation import ticker_batch_runner as gsf
 @pytest.fixture
 def temp_output_dir(tmp_path):
     # Override global variables for test isolation
-    gsf.OUTPUT_DIR = str(tmp_path / "features_parquet")
-    gsf.MERGED_FILE = str(tmp_path / "features_parquet" / "features_all_tickers.parquet")
+    gsf.OUTPUT_DIR = str(tmp_path / "features_data")
+    gsf.MERGED_FILE = str(tmp_path / "features_data" / "features_all_tickers.parquet")
     gsf.AS_OF_DATE = date(2024, 5, 1)
     yield tmp_path
     shutil.rmtree(gsf.OUTPUT_DIR, ignore_errors=True)
@@ -24,7 +24,7 @@ def temp_output_dir(tmp_path):
 def test_generate_feature_parquets(mock_build, mock_fetch, tmp_path):
 
     tickers = ["AAPL", "MSFT"]
-    output_dir = tmp_path / "features_parquet"
+    output_dir = tmp_path / "features_data"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Override config

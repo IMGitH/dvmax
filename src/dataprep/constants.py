@@ -55,6 +55,13 @@ EXPECTED_COLUMNS = [
     # Note: sector one-hot columns are still dynamic and handled separately
 ]
 
+ALL_SECTOR_COLUMNS = [
+    "sector_basic_materials", "sector_communication_services", "sector_consumer_cyclical",
+    "sector_consumer_defensive", "sector_energy", "sector_financial_services",
+    "sector_healthcare", "sector_industrials", "sector_materials",
+    "sector_real_estate", "sector_technology", "sector_utilities"
+]
+
 MACRO_INDICATORS = {
     "NY.GDP.MKTP.CD": "GDP (USD)",  # Measures total economic output; a shrinking GDP can signal lower corporate earnings and higher cut risk.
 
