@@ -19,16 +19,38 @@ START_DATE = date(2024, 1, 1)  # <-- adjust your backtesting start
 END_DATE = date.today().replace(month=12, day=31)  # e.g. last full year
 FREQ = "1Y"  # or use month intervals via custom date generation
 
-OUTPUT_DIR = "features_parquet/timeseries"
+OUTPUT_DIR = "features_data/timeseries"
 TICKERS_FILE = "us_tickers_subset.txt"
 SLEEP_BETWEEN_CALLS = 1.0
 MAX_RETRIES = 3
 OVERWRITE_MODE = os.environ.get("OVERWRITE_MODE", "none").lower()
 
-OUTPUT_DIR = os.path.join("features_parquet", "tickers_data")
+OUTPUT_DIR = os.path.join("features_data", "tickers_history")
 
 # === Utilities ===
+def save_static_row(static_df: pl.DataFrame):
+    static_path = os.path.join("features_data", "tickers_static", "static_ticker_info.parquet")
+    os.makedirs(os.path.dirname(static_path), exist_ok=True)
 
+    if os.path.exists(static_path):
+        existing = pl.read_parquet(static_path)
+
+        # Ensure schema compatibility
+        all_columns = sorted(set(existing.columns) | set(static_df.columns))
+        existing = fill_missing_columns(existing, all_columns)
+        static_df = fill_missing_columns(static_df, all_columns)
+
+        combined = pl.concat([existing, static_df], how="vertical").unique(subset=["ticker"])
+    else:
+        combined = static_df
+
+    # Round and cast to float32 if needed
+    combined = cast_and_round_numeric(combined)
+
+    combined.write_parquet(static_path, compression="zstd")
+    print(f"💾 Static info saved (total: {combined.height} rows) → {static_path}")
+
+    
 def get_dates_between(start: date, end: date, freq: str = "1Y") -> List[date]:
     current = start
     dates = []
@@ -62,7 +84,23 @@ def fill_missing_columns(df: pl.DataFrame, all_columns: List[str]) -> pl.DataFra
             df = df.with_columns(pl.lit(None).alias(col))
     return df.select(all_columns)
 
+def is_numeric_dtype(dtype: pl.DataType) -> bool:
+    return isinstance(dtype, (
+        pl.Float32, pl.Float64,
+        pl.Int8, pl.Int16, pl.Int32, pl.Int64,
+        pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64
+    ))
 
+def cast_and_round_numeric(df: pl.DataFrame) -> pl.DataFrame:
+    cols = []
+    for col in df.columns:
+        dtype = df[col].dtype
+        if is_numeric_dtype(dtype):
+            # Round first in float64, then cast to float32
+            cols.append(pl.col(col).round(2).cast(pl.Float32).alias(col))
+        else:
+            cols.append(pl.col(col))
+    return df.select(cols)
 
 def save_or_append(df: pl.DataFrame, ticker: str, merge_with_existing: bool = True):
     if not isinstance(df, pl.DataFrame):
@@ -77,49 +115,82 @@ def save_or_append(df: pl.DataFrame, ticker: str, merge_with_existing: bool = Tr
     if merge_with_existing and os.path.exists(path):
         df_existing = pl.read_parquet(path)
 
-        # Ensure both have same schema
+        # Ensure both have the same set of columns
         all_columns = sorted(set(df.columns) | set(df_existing.columns))
-        df_existing = fill_missing_columns(df_existing, all_columns)
         df = fill_missing_columns(df, all_columns)
+        df_existing = fill_missing_columns(df_existing, all_columns)
+
+        # Round and cast to Float32 first
+        df = cast_and_round_numeric(df)
+        df_existing = cast_and_round_numeric(df_existing)
+
+        # Match dtypes exactly
+        cast_schema = {}
+        for col in all_columns:
+            dtype_existing = df_existing[col].dtype
+            dtype_new = df[col].dtype
+            if dtype_existing != dtype_new:
+                if is_numeric_dtype(dtype_existing) and is_numeric_dtype(dtype_new):
+                    cast_schema[col] = pl.Float32
+                else:
+                    cast_schema[col] = dtype_existing
+
+        if cast_schema:
+            df = df.cast(cast_schema)
+            df_existing = df_existing.cast(cast_schema)
 
         df = pl.concat([df_existing, df], how="vertical").unique(subset=["as_of"])
 
-    df.write_parquet(path)
-    print(f"💾 Saved: {ticker} ({df.height} rows) → {path}")
+    else:
+        df = cast_and_round_numeric(df)
 
 
-def fetch_and_build_features(ticker: str, as_of: date) -> pl.DataFrame:
+    df.write_parquet(path, compression="zstd")
+    print(f"💾 Saved: {ticker} ({df.height} rows, compressed) → {path}")
+
+
+def fetch_and_build_features(ticker: str, as_of: date) -> tuple[pl.DataFrame, pl.DataFrame]:
     inputs = fetch_all_per_ticker(ticker, div_lookback_years=5, other_lookback_years=5)
+
     if not has_enough_price_data(inputs, as_of):
         raise ValueError("Not enough price data available for required historical features")
-    df = build_feature_table_from_inputs(ticker, inputs, as_of)
-    if not isinstance(df, pl.DataFrame):
-        raise TypeError(f"[BUG] build_feature_table_from_inputs did not return a Polars DataFrame for {ticker}@{as_of} — got {type(df)}")
-    if df.is_empty():
-        raise ValueError(f"[WARN] build_feature_table_from_inputs returned empty df for {ticker}@{as_of}")
-    df = df.with_columns([
+
+    dynamic_df, static_df = build_feature_table_from_inputs(ticker, inputs, as_of)
+
+    if not isinstance(dynamic_df, pl.DataFrame):
+        raise TypeError(f"[BUG] dynamic_df is not a Polars DataFrame for {ticker}@{as_of} — got {type(dynamic_df)}")
+    if not isinstance(static_df, pl.DataFrame):
+        raise TypeError(f"[BUG] static_df is not a Polars DataFrame for {ticker}@{as_of} — got {type(static_df)}")
+
+    if dynamic_df.is_empty():
+        raise ValueError(f"[WARN] build_feature_table_from_inputs returned empty dynamic_df for {ticker}@{as_of}")
+
+    dynamic_df = dynamic_df.with_columns([
         pl.lit(ticker).alias("ticker"),
         pl.lit(as_of).cast(pl.Date).alias("as_of")
     ])
-    df = df.select(["ticker", "as_of"] + [col for col in df.columns if col not in ("ticker", "as_of")])
-    return df
+    dynamic_df = dynamic_df.select(["ticker", "as_of"] + [col for col in dynamic_df.columns if col not in ("ticker", "as_of")])
+
+    return dynamic_df, static_df
 
 
 def generate_features_for_ticker(ticker: str, all_dates: List[date]):
     collected = []
     results = []
-
+    static_written = False
     for as_of in all_dates:
         for attempt in range(1, MAX_RETRIES + 1):
             try:
-                df = fetch_and_build_features(ticker, as_of)
-                if df.is_empty():
+                dynamic_df, static_df = fetch_and_build_features(ticker, as_of)
+                if dynamic_df.is_empty():
                     results.append(f"[WARN] No data for {ticker} on {as_of}")
                     break
-                collected.append(df)
+                collected.append(dynamic_df)
+                if not static_written:
+                    save_static_row(static_df)
+                    static_written = True
                 results.append(f"[OK] {ticker} on {as_of}")
                 break
-
             except ValueError as ve:
                 if "Not enough" in str(ve):
                     results.append(f"[SKIP] {ticker}@{as_of}: {ve}")

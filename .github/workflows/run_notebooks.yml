@@ -4,7 +4,11 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - '*.ipynb'
+      - '**/*.ipynb'
+      - requirements.txt
+  pull_request:
+    paths:
+      - '**/*.ipynb'
       - requirements.txt
 
 jobs:

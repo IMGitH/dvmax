@@ -178,7 +178,7 @@ Efficient, compressed, columnar format:
     fundamentals_q.parquet
   /dividends/
     dividend_history_q.parquet
-  /macro/
+  /macro_history/
     interest_rates.parquet
   /features/
     stock_features_YYYYQX.parquet

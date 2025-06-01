@@ -89,7 +89,7 @@ def engineer_macro_features(df: pl.DataFrame, as_of: date, country: str, output_
 
 
     # === Save to file ===
-    output_dir = os.path.join(output_root, "macro")
+    output_dir = os.path.join(output_root, "macro_history")
     os.makedirs(output_dir, exist_ok=True)
 
     output_path = os.path.join(output_dir, f"{country.replace(' ', '_').lower()}.parquet")
@@ -113,7 +113,7 @@ def fetch_and_save_macro(
     country: str,
     start_year: int,
     end_year: int = date.today().year,
-    output_root: str = "features_parquet"
+    output_root: str = "features_data"
 ) -> str:
     macro_api = WorldBankAPI()
     df_raw = macro_api.fetch_macro_indicators(
