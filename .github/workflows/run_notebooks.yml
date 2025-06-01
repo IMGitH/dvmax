@@ -1,0 +1,41 @@
+name: Run & Render Notebooks
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '*.ipynb'
+      - requirements.txt
+
+jobs:
+  execute-notebooks:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies from requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install nbconvert ipykernel
+          python -m ipykernel install --user --name python3
+
+      - name: Execute and convert all root notebooks to HTML
+        run: |
+          for nb in ./*.ipynb; do
+            echo "Processing $nb"
+            jupyter nbconvert --to html --execute "$nb" --output "${nb%.ipynb}.html"
+          done
+
+      - name: Upload HTML results
+        uses: actions/upload-artifact@v4
+        with:
+          name: notebook-html-outputs
+          path: ./*.html
