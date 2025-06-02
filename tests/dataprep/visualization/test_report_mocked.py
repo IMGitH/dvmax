@@ -1,11 +1,26 @@
 import polars as pl
 from unittest.mock import patch
 from datetime import date
-from tests.dataprep.features.aggregation.test_ticker_row_builder import get_random_prices
 from src.dataprep.features.aggregation.ticker_row_builder import build_feature_table_from_inputs
 from src.dataprep.visualization.report import print_feature_report_from_df
 from src.dataprep.features.aggregation.ticker_row_builder import add_has_flags
 import numpy as np
+
+def get_random_prices():
+    import polars as pl
+    import random
+    from datetime import timedelta, date
+
+    today = date(2025, 6, 2)
+    dates = [today - timedelta(days=i) for i in range(300) if (today - timedelta(days=i)).weekday() < 5]  # Weekdays only
+    dates = sorted(dates)[-260:]  # Keep latest 260 days
+
+    return pl.DataFrame({
+        "ticker": ["MOCK"] * len(dates),
+        "date": dates,
+        "close": [100 + random.uniform(-5, 5) for _ in range(len(dates))],
+        "dividend_yield": [2.0 + random.uniform(-0.3, 0.3) for _ in range(len(dates))]
+    })
 
 
 @patch("src.dataprep.fetcher.ticker_data_sources.fetch_prices")
@@ -58,7 +73,7 @@ def test_print_report_with_mocked_data(
 
     from src.dataprep.fetcher.ticker_data_sources import fetch_all_per_ticker
     inputs = fetch_all_per_ticker("MOCK", div_lookback_years=5, other_lookback_years=5)
-    df = build_feature_table_from_inputs("MOCK", inputs, as_of=date.today())
+    df, _ = build_feature_table_from_inputs("MOCK", inputs, as_of=date.today())
 
     # Validate presence and correctness of binary flags
     binary_flags = [
