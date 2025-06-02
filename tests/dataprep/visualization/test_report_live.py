@@ -10,5 +10,7 @@ from src.dataprep.visualization.report import print_feature_report_from_df
 def test_print_report_live():
     ticker = "AAPL"
     inputs = fetch_all_per_ticker(ticker, div_lookback_years=5, other_lookback_years=5)
-    df = build_feature_table_from_inputs(ticker, inputs, as_of=date.today())
-    print_feature_report_from_df(df, inputs, date.today())  # visually check output for now
+    df_dynamic, _ = build_feature_table_from_inputs(ticker, inputs, as_of=date.today())
+    
+    # ✅ Pass the correct variable
+    print_feature_report_from_df(df_dynamic, inputs, date.today())  # visually inspect output for now

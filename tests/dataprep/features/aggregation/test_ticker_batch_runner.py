@@ -1,109 +1,74 @@
+
+import os
 import shutil
+import tempfile
 from datetime import date
-from pathlib import Path
-from unittest.mock import patch
-
 import polars as pl
-import pytest
 
-from src.dataprep.features.aggregation import ticker_batch_runner as gsf
+from src.dataprep.features.aggregation.ticker_batch_runner import (
+    generate_features_for_ticker,
+    save_or_append,
+    get_parquet_path,
+)
 
+def mock_feature_df(ticker, as_of):
+    return pl.DataFrame([
+        {
+            "ticker": ticker,
+            "as_of": as_of,
+            "6m_return": 0.1,
+            "12m_return": 0.2,
+            "volatility": 0.3,
+            "max_drawdown_1y": 0.1,
+            "sector_relative_6m": 0.01,
+            "sma_50_200_delta": 0.05,
+            "net_debt_to_ebitda": 1.5,
+            "ebit_interest_cover": 10.0,
+            "ebit_interest_cover_capped": 10.0,
+            "eps_cagr_3y": 0.1,
+            "fcf_cagr_3y": 0.1,
+            "dividend_yield": 0.01,
+            "dividend_cagr_3y": 0.01,
+            "dividend_cagr_5y": 0.01,
+            "yield_vs_5y_median": 0.01,
+            "pe_ratio": 15.0,
+            "pfcf_ratio": 18.0,
+            "payout_ratio": 0.3,
+            "has_eps_cagr_3y": 1,
+            "has_fcf_cagr_3y": 1,
+            "has_dividend_yield": 1,
+            "has_dividend_cagr_3y": 1,
+            "has_dividend_cagr_5y": 1,
+            "has_ebit_interest_cover": 1,
+        }
+    ])
 
-@pytest.fixture
-def temp_output_dir(tmp_path):
-    # Override global variables for test isolation
-    gsf.OUTPUT_DIR = str(tmp_path / "features_data")
-    gsf.MERGED_FILE = str(tmp_path / "features_data" / "features_all_tickers.parquet")
-    gsf.AS_OF_DATE = date(2024, 5, 1)
-    yield tmp_path
-    shutil.rmtree(gsf.OUTPUT_DIR, ignore_errors=True)
+def test_append_skips_existing(monkeypatch):
+    tmpdir = tempfile.mkdtemp()
+    try:
+        ticker = "TEST"
+        os.makedirs(os.path.join(tmpdir, "tickers_history"), exist_ok=True)
+        monkeypatch.setattr("src.dataprep.features.aggregation.ticker_batch_runner.OUTPUT_DIR", os.path.join(tmpdir, "tickers_history"))
 
+        path = get_parquet_path(ticker)
+        initial_df = mock_feature_df(ticker, date(2024, 1, 1))
+        save_or_append(initial_df, ticker, merge_with_existing=False)
 
-@patch("src.dataprep.features.aggregation.ticker_batch_runner.fetch_all_per_ticker")
-@patch("src.dataprep.features.aggregation.ticker_batch_runner.build_feature_table_from_inputs")
-def test_generate_feature_parquets(mock_build, mock_fetch, tmp_path):
+        assert os.path.exists(path)
+        original_rows = pl.read_parquet(path)
+        assert original_rows.height == 1
 
-    tickers = ["AAPL", "MSFT"]
-    output_dir = tmp_path / "features_data"
-    output_dir.mkdir(parents=True, exist_ok=True)
+        # Try saving again with same date (should skip if implemented properly)
+        second_df = mock_feature_df(ticker, date(2024, 1, 1))
+        save_or_append(second_df, ticker, merge_with_existing=True)
+        updated_rows = pl.read_parquet(path)
+        assert updated_rows.height == 1  # no duplicate
 
-    # Override config
-    gsf.OUTPUT_DIR = str(output_dir)
-    gsf.MERGED_FILE = str(output_dir / "features_all_tickers.parquet")
-    gsf.OVERWRITE_MODE = "all"
+        # Add a new date
+        third_df = mock_feature_df(ticker, date(2025, 1, 1))
+        save_or_append(third_df, ticker, merge_with_existing=True)
+        final_rows = pl.read_parquet(path)
+        assert final_rows.height == 2  # one new row added
 
-    ticker_file = tmp_path / "tickers.txt"
-    ticker_file.write_text("\n".join(tickers))
-    gsf.TICKERS_FILE = str(ticker_file)
-    gsf.AS_OF_DATE = date(2024, 5, 1)
-
-    # Mock fetch_all_per_ticker to accept any kwargs
-    def mock_fetch_side_effect(ticker, **kwargs):
-        return {"ticker": ticker, "dummy": "data"}
-
-    mock_fetch.side_effect = mock_fetch_side_effect
-
-    # Mock build_feature_table_from_inputs with controlled differentiation
-    def mock_build_side_effect(ticker, inputs, as_of):
-        is_msft = ticker == "MSFT"
-        return pl.DataFrame({
-            "ticker": [ticker],
-            "6m_return": [0.1 if not is_msft else 0.15],
-            "12m_return": [0.2 if not is_msft else 0.25],
-            "volatility": [0.3 if not is_msft else 0.35],
-            "max_drawdown_1y": [0.4],
-            "sector_relative_6m": [0.5],
-            "sma_50_200_delta": [0.6],
-            "net_debt_to_ebitda": [1.0],
-            "ebit_interest_cover": [5.0],
-            "ebit_interest_cover_capped": [5.0],
-            "eps_cagr_3y": [0.1],
-            "fcf_cagr_3y": [0.2],
-            "dividend_yield": [0.03],
-            "dividend_cagr_3y": [0.05],
-            "dividend_cagr_5y": [0.07],
-            "yield_vs_5y_median": [0.01],
-            "pe_ratio": [15.0],
-            "pfcf_ratio": [12.0],
-            "payout_ratio": [0.4],
-            "country": ["US"],
-            "has_eps_cagr_3y": [1],
-            "has_fcf_cagr_3y": [1],
-            "has_dividend_yield": [1],
-            "has_dividend_cagr_3y": [1],
-            "has_dividend_cagr_5y": [1],
-            "has_ebit_interest_cover": [1],
-        })
-
-    mock_build.side_effect = mock_build_side_effect
-
-    # Run the actual pipeline
-    gsf.main()
-
-    # Validate individual output files
-    for ticker in tickers:
-        path = Path(gsf.OUTPUT_DIR) / f"{ticker}.parquet"
-        assert path.exists(), f"{path} was not created"
-
-    # Validate merged output file
-    merged_path = Path(gsf.MERGED_FILE)
-    assert merged_path.exists(), "Merged parquet file was not created"
-
-    merged_df = pl.read_parquet(merged_path)
-    found_tickers = merged_df["ticker"].unique().to_list()
-
-    # Confirm correct tickers
-    assert sorted(found_tickers) == sorted(tickers), f"Unexpected tickers in merged file: {found_tickers}"
-
-    # Confirm row count = # of tickers
-    assert merged_df.shape[0] == len(tickers), f"Unexpected number of rows: {merged_df.shape[0]}"
-
-    # Confirm data is differentiated
-    msft_row = merged_df.filter(pl.col("ticker") == "MSFT")
-    aapl_row = merged_df.filter(pl.col("ticker") == "AAPL")
-
-    assert msft_row["6m_return"][0] == 0.15
-    assert aapl_row["6m_return"][0] == 0.1
-
-    # Optional debug output
-    print("🧪 Merged DataFrame:\n", merged_df)
+    finally:
+        shutil.rmtree(tmpdir)

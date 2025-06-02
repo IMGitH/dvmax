@@ -1,13 +1,13 @@
 from datetime import date
 import polars as pl
-from src.dataprep.features.aggregation.ticker_row_builder import \
-    build_feature_table_from_inputs
-
+from src.dataprep.features.aggregation.ticker_row_builder import build_feature_table_from_inputs
 from src.dataprep.constants import GROUP_PREFIXES, SOURCE_HINTS
 
+
 def print_feature_report_from_df(df: pl.DataFrame, inputs: dict, as_of: date):
-    row = df.row(0, named=True)
+    row = df.to_dicts()[0]  # Use first row as a dict
     used_keys = set()
+
     profile_df = inputs.get("profile")
     if isinstance(profile_df, pl.DataFrame):
         sector_str = profile_df["sector"] if "sector" in profile_df.columns else "N/A"
@@ -25,7 +25,7 @@ def print_feature_report_from_df(df: pl.DataFrame, inputs: dict, as_of: date):
             print("\nDataFrame used:")
             print(source_df)
 
-    print(f"\n=== Feature Report for {row['ticker']} ===")
+    print(f"\n=== Feature Report for {row.get('ticker', 'N/A')} ===")
     print(f"- As of: {as_of.isoformat()}")
     print(f"- Shape: {df.shape}")
 
@@ -44,7 +44,6 @@ def print_feature_report_from_df(df: pl.DataFrame, inputs: dict, as_of: date):
 
         print_group(group_name, keys, source_df)
 
-    # Catch any remaining keys
     other_keys = sorted(set(row.keys()) - used_keys - {"ticker"})
     if other_keys:
         print_group("Other Features", other_keys)
@@ -52,7 +51,11 @@ def print_feature_report_from_df(df: pl.DataFrame, inputs: dict, as_of: date):
 
 if __name__ == "__main__":
     from src.dataprep.fetcher.ticker_data_sources import fetch_all_per_ticker
+
     ticker = "AAPL"
     inputs = fetch_all_per_ticker(ticker, div_lookback_years=5, other_lookback_years=5)
-    df = build_feature_table_from_inputs(ticker, inputs, as_of=date.today())
-    print_feature_report_from_df(df, inputs, date.today())
+
+    # ✅ Correct unpacking here
+    df_dynamic, _ = build_feature_table_from_inputs(ticker, inputs, as_of=date.today())
+
+    print_feature_report_from_df(df_dynamic, inputs, date.today())
