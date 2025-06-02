@@ -10,6 +10,7 @@ from tqdm import tqdm
 
 from src.dataprep.fetcher.ticker_data_sources import fetch_all_per_ticker
 from src.dataprep.features.aggregation.ticker_row_builder import build_feature_table_from_inputs
+from src.dataprep.features.aggregation.validate_dynamic_row import validate_dynamic_row
 from src.dataprep.constants import EXPECTED_COLUMNS
 
 # === Configuration ===
@@ -192,6 +193,7 @@ def generate_features_for_ticker(ticker: str, all_dates: List[date]):
 
     # Load existing data to skip already-processed dates
     existing_path = get_parquet_path(ticker)
+    existing_df = None  # <-- ensure it's always defined
     existing_dates = set()
     if os.path.exists(existing_path):
         try:
@@ -209,25 +211,16 @@ def generate_features_for_ticker(ticker: str, all_dates: List[date]):
         for attempt in range(1, MAX_RETRIES + 1):
             try:
                 dynamic_df, static_df = fetch_and_build_features(ticker, as_of)
-                if dynamic_df.is_empty():
-                    results.append(f"[WARN] No data for {ticker} on {as_of}")
-                    break
-                collected.append(dynamic_df)
-                if not static_written:
-                    save_static_row(static_df)
-                    static_written = True
-                results.append(f"[OK] {ticker} on {as_of}")
-                break
+                # Run validation here
+                validate_dynamic_row(dynamic_df, ticker, prev_df=existing_df)
             except ValueError as ve:
-                if "Not enough" in str(ve):
-                    results.append(f"[SKIP] {ticker}@{as_of}: {ve}")
-                    break
-                if attempt < MAX_RETRIES:
-                    print(f"[RETRY] {ticker}@{as_of} (attempt {attempt}) – {ve}")
-                    time.sleep(2 * attempt)
-                else:
-                    results.append(f"[FAIL] {ticker}@{as_of} after {MAX_RETRIES} attempts: {ve}")
-                    break
+                quarantine_path = f"features_data/_invalid/{ticker}_{as_of}.parquet"
+                os.makedirs(os.path.dirname(quarantine_path), exist_ok=True)
+                if 'dynamic_df' in locals() and isinstance(dynamic_df, pl.DataFrame):
+                    dynamic_df.write_parquet(quarantine_path)
+                print(f"[INVALID] {ticker}@{as_of} quarantined → {quarantine_path} due to: {ve}")
+                results.append(f"[INVALID] {ticker}@{as_of}: {ve}")
+                break
             except Exception as e:
                 if attempt < MAX_RETRIES:
                     print(f"[RETRY] {ticker}@{as_of} (attempt {attempt}) – {e}")
