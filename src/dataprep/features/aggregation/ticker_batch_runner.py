@@ -40,12 +40,24 @@ def save_static_row(static_df: pl.DataFrame):
         existing = fill_missing_columns(existing, all_columns)
         static_df = fill_missing_columns(static_df, all_columns)
 
-        combined = pl.concat([existing, static_df], how="vertical").unique(subset=["ticker"])
-    else:
-        combined = static_df
+        # Match dtypes exactly
+        cast_schema = {}
+        for col in all_columns:
+            dtype_existing = existing[col].dtype
+            dtype_new = static_df[col].dtype
+            if dtype_existing != dtype_new:
+                if is_numeric_dtype(dtype_existing) and is_numeric_dtype(dtype_new):
+                    cast_schema[col] = dtype_existing  # Keep existing schema
+                else:
+                    cast_schema[col] = dtype_existing  # Also fallback for strings/bools
 
-    # Round and cast to float32 if needed
-    combined = cast_and_round_numeric(combined)
+        static_df = static_df.cast(cast_schema)
+        existing = existing.cast(cast_schema)
+
+        combined = pl.concat([existing, static_df], how="vertical").unique(subset=["ticker"])
+
+    else:
+        combined = cast_and_round_numeric(static_df)
 
     combined.write_parquet(static_path, compression="zstd")
     print(f"💾 Static info saved (total: {combined.height} rows) → {static_path}")
@@ -173,12 +185,27 @@ def fetch_and_build_features(ticker: str, as_of: date) -> tuple[pl.DataFrame, pl
 
     return dynamic_df, static_df
 
-
 def generate_features_for_ticker(ticker: str, all_dates: List[date]):
     collected = []
     results = []
     static_written = False
+
+    # Load existing data to skip already-processed dates
+    existing_path = get_parquet_path(ticker)
+    existing_dates = set()
+    if os.path.exists(existing_path):
+        try:
+            existing_df = pl.read_parquet(existing_path)
+            if "as_of" in existing_df.columns:
+                existing_dates = set(existing_df["as_of"].to_list())
+        except Exception as e:
+            print(f"[WARN] Failed to read existing data for {ticker} – treating as new: {e}")
+
     for as_of in all_dates:
+        if as_of in existing_dates and OVERWRITE_MODE not in ("all", "partial"):
+            results.append(f"[SKIP] {ticker}@{as_of} already exists")
+            continue
+
         for attempt in range(1, MAX_RETRIES + 1):
             try:
                 dynamic_df, static_df = fetch_and_build_features(ticker, as_of)
@@ -201,7 +228,6 @@ def generate_features_for_ticker(ticker: str, all_dates: List[date]):
                 else:
                     results.append(f"[FAIL] {ticker}@{as_of} after {MAX_RETRIES} attempts: {ve}")
                     break
-
             except Exception as e:
                 if attempt < MAX_RETRIES:
                     print(f"[RETRY] {ticker}@{as_of} (attempt {attempt}) – {e}")
