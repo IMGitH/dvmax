@@ -15,7 +15,7 @@ from src.dataprep.constants import EXPECTED_COLUMNS
 
 # === Configuration ===
 # START_DATE = date(2020, 12, 31)  # <-- adjust your backtesting start
-START_DATE = date(2024, 1, 1)  # <-- adjust your backtesting start
+START_DATE = date(2023, 1, 1)  # <-- adjust your backtesting start
 
 END_DATE = date.today().replace(month=12, day=31)  # e.g. last full year
 FREQ = "1Y"  # or use month intervals via custom date generation
@@ -24,7 +24,16 @@ OUTPUT_DIR = "features_data/timeseries"
 TICKERS_FILE = "us_tickers_subset.txt"
 SLEEP_BETWEEN_CALLS = 1.0
 MAX_RETRIES = 3
-OVERWRITE_MODE = os.environ.get("OVERWRITE_MODE", "none").lower()
+# OVERWRITE_MODE controls how existing feature data is handled:
+# - "none": skip existing rows entirely
+# - "append": skip existing rows, append only new ones (default)
+# - "partial": overwrite rows only for dates being regenerated
+# - "all": ignore existing file completely and overwrite everything
+# - "merged": only affects final merged file, not per-ticker files
+OVERWRITE_MODE = os.environ.get("OVERWRITE_MODE", "append").lower()
+VALID_OVERWRITE_MODES = {"none", "append", "partial", "all", "merged"}
+if OVERWRITE_MODE not in VALID_OVERWRITE_MODES:
+    raise ValueError(f"Invalid OVERWRITE_MODE: '{OVERWRITE_MODE}'. Must be one of {VALID_OVERWRITE_MODES}")
 
 OUTPUT_DIR = os.path.join("features_data", "tickers_history")
 
@@ -157,7 +166,7 @@ def save_or_append(df: pl.DataFrame, ticker: str, merge_with_existing: bool = Tr
     else:
         df = cast_and_round_numeric(df)
 
-
+    df = df.sort("as_of")
     df.write_parquet(path, compression="zstd")
     print(f"💾 Saved: {ticker} ({df.height} rows, compressed) → {path}")
 
@@ -198,21 +207,37 @@ def generate_features_for_ticker(ticker: str, all_dates: List[date]):
     if os.path.exists(existing_path):
         try:
             existing_df = pl.read_parquet(existing_path)
-            if "as_of" in existing_df.columns:
-                existing_dates = set(existing_df["as_of"].to_list())
+            existing_dates = set(existing_df["as_of"].cast(pl.Date).to_list())
         except Exception as e:
             print(f"[WARN] Failed to read existing data for {ticker} – treating as new: {e}")
 
     for as_of in all_dates:
-        if as_of in existing_dates and OVERWRITE_MODE not in ("all", "partial"):
-            results.append(f"[SKIP] {ticker}@{as_of} already exists")
-            continue
+        if as_of in existing_dates:
+            if OVERWRITE_MODE == "none":
+                results.append(f"[SKIP] {ticker}@{as_of} already exists")
+                continue
+            elif OVERWRITE_MODE == "partial" and existing_df is not None:
+                # Remove the old row for this date so it can be replaced
+                existing_df = existing_df.filter(pl.col("as_of") != as_of)
 
         for attempt in range(1, MAX_RETRIES + 1):
             try:
                 dynamic_df, static_df = fetch_and_build_features(ticker, as_of)
+
                 # Run validation here
                 validate_dynamic_row(dynamic_df, ticker, prev_df=existing_df)
+
+                # Add to collection for saving later
+                collected.append(dynamic_df)
+
+                # Save static row only once
+                if not static_written:
+                    save_static_row(static_df)
+                    static_written = True
+
+                results.append(f"[OK] {ticker}@{as_of}")
+                break  # Done for this date
+
             except ValueError as ve:
                 quarantine_path = f"features_data/_invalid/{ticker}_{as_of}.parquet"
                 os.makedirs(os.path.dirname(quarantine_path), exist_ok=True)
@@ -221,6 +246,7 @@ def generate_features_for_ticker(ticker: str, all_dates: List[date]):
                 print(f"[INVALID] {ticker}@{as_of} quarantined → {quarantine_path} due to: {ve}")
                 results.append(f"[INVALID] {ticker}@{as_of}: {ve}")
                 break
+
             except Exception as e:
                 if attempt < MAX_RETRIES:
                     print(f"[RETRY] {ticker}@{as_of} (attempt {attempt}) – {e}")
@@ -233,6 +259,7 @@ def generate_features_for_ticker(ticker: str, all_dates: List[date]):
 
     if collected:
         full_df = pl.concat(collected, how="vertical").unique(subset=["as_of"])
+        print(f"[SAVE] Appending {full_df.height} new rows for {ticker}")
         save_or_append(full_df, ticker, merge_with_existing=True)
 
     return "\n".join(results)
@@ -276,7 +303,7 @@ def merge_all_feature_vectors():
         df = df.cast(schema)
         dfs.append(df)
 
-    merged_df = pl.concat(dfs, how="vertical")
+    merged_df = pl.concat(dfs, how="vertical").sort(["ticker", "as_of"])
 
     merged_file = os.path.join(OUTPUT_DIR, "features_all_tickers_timeseries.parquet")
     if OVERWRITE_MODE in ("all", "merged") or not os.path.exists(merged_file):
