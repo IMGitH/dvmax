@@ -239,10 +239,19 @@ def generate_features_for_ticker(ticker: str, all_dates: List[date]):
                 break  # Done for this date
 
             except ValueError as ve:
-                quarantine_path = f"features_data/_invalid/{ticker}_{as_of}.parquet"
+                short_reason = str(ve).split(":")[0].replace(" ", "_").replace("[", "").replace("]", "")
+                quarantine_path = f"features_data/_invalid/{ticker}_{as_of}_{short_reason}.parquet"
                 os.makedirs(os.path.dirname(quarantine_path), exist_ok=True)
+
                 if 'dynamic_df' in locals() and isinstance(dynamic_df, pl.DataFrame):
+                    if "as_of" in dynamic_df.columns:
+                        dynamic_df = dynamic_df.sort("as_of")
                     dynamic_df.write_parquet(quarantine_path)
+
+                    error_txt = quarantine_path.replace(".parquet", ".txt")
+                    with open(error_txt, "w") as f:
+                        f.write(f"{ticker}@{as_of}\nReason: {ve}")
+
                 print(f"[INVALID] {ticker}@{as_of} quarantined → {quarantine_path} due to: {ve}")
                 results.append(f"[INVALID] {ticker}@{as_of}: {ve}")
                 break
