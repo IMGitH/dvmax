@@ -33,11 +33,9 @@ class FMPClient:
             except Exception as e:
                 raise PermissionError(f"Failed to access '{endpoint}': {str(e)}")
 
-        # Handle rate limiting (429): wait for 60 seconds and retry
         while response.status_code == 429:
-            print("Rate limited. Sleeping for 60 seconds...")
-            time.sleep(60)
             response = requests.get(url, params=params, headers=headers)
+            print (response.text)
 
         # Handle any other non-2xx status codes
         response.raise_for_status()
