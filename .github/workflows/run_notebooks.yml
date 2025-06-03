@@ -2,10 +2,6 @@ name: Run & Render Notebooks
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - '**/*.ipynb'
-      - requirements.txt
   pull_request:
     paths:
       - '**/*.ipynb'
