@@ -58,6 +58,13 @@ def test_range_violation_raises():
         validate_dynamic_row(df, ticker="MOCK")
 
 def test_trend_violation_raises():
-    current, previous = make_invalid_trend_df()
+    current = pl.DataFrame({
+        "as_of": [date(2024, 12, 31)],
+        "dividend_yield": [0.2],  # within range
+    })
+    previous = pl.DataFrame({
+        "as_of": [date(2023, 12, 31)],
+        "dividend_yield": [0.01],  # drastic increase to trigger trend alert
+    })
     with pytest.raises(ValueError, match="abnormal change"):
         validate_dynamic_row(current, ticker="MOCK", prev_df=previous)
