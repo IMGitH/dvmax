@@ -10,7 +10,9 @@ class FMPClient:
         self.api_key = os.getenv("FMP_API_KEY")
         self.base_url = "https://financialmodelingprep.com/api/v3"
 
-    def fetch(self, endpoint: str, params: dict = {}) -> dict:
+    def fetch(self, endpoint: str, params: dict | None = None) -> dict:
+        if params is None:
+            params = {}
         url = f"{self.base_url}/{endpoint}"
         headers = {"User-Agent": "Mozilla/5.0"}
         params["apikey"] = self.api_key
