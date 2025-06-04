@@ -1,7 +1,7 @@
 name: Run & Render Notebooks
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: 
   pull_request:
     paths:
       - '**/*.ipynb'
@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
+      - name: Checkout repo 
         uses: actions/checkout@v4
         with:
           lfs: true
