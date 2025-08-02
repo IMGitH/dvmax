@@ -35,6 +35,22 @@ jobs:
         run: |
           python src/dataprep/features/aggregation/ticker_batch_runner.py
 
+      - name: 🧪 Show validation failures
+        if: always()  # run even if previous steps failed
+        run: |
+          echo "🔍 Checking for validation issues..."
+
+          if compgen -G "features_data/_invalid/*.txt" > /dev/null; then
+            echo "🚨 Validation failures found:"
+            for f in features_data/_invalid/*.txt; do
+              echo ""
+              echo "----- $(basename "$f") -----"
+              cat "$f"
+            done
+          else
+            echo "✅ No validation failures detected."
+          fi
+
       - name: 📂 Track output files in LFS
         run: |
           git lfs install
