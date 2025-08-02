@@ -21,7 +21,7 @@ END_DATE = date.today().replace(month=12, day=31)  # e.g. last full year
 FREQ = "1Y"  # or use month intervals via custom date generation
 
 OUTPUT_DIR = "features_data/timeseries"
-TICKERS_FILE = "us_tickers_subset.txt"
+TICKERS_FILE = "us_tickers_subset_limited.txt"
 SLEEP_BETWEEN_CALLS = 1.0
 MAX_RETRIES = 3
 # OVERWRITE_MODE controls how existing feature data is handled:

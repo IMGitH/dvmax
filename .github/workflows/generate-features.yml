@@ -1,0 +1,56 @@
+name: Generate Macro & Ticker Features
+
+on:
+  workflow_dispatch:  # manual trigger, or use `schedule:` for cron jobs
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+
+    env:
+      PYTHON_VERSION: "3.11"
+      OVERWRITE_MODE: "append"  # can override here
+
+    steps:
+      - name: ⬇️ Checkout repository
+        uses: actions/checkout@v3
+        with:
+          lfs: true  # Enables Git LFS tracking
+
+      - name: 🧪 Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: 📦 Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 🧮 Run macro batch generation
+        run: |
+          python src/dataprep/features/aggregation/macro_batch_runner.py
+
+      - name: 🧮 Run ticker batch generation
+        run: |
+          python src/dataprep/features/aggregation/ticker_batch_runner.py
+
+      - name: 📂 Track output files in LFS
+        run: |
+          git lfs install
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add features_data/macro_history/*.parquet
+          git add features_data/tickers_history/*.parquet
+          git add features_data/tickers_static/*.parquet
+          git add features_data/_invalid/*.parquet || true  # some might be empty
+          git add features_data/tickers_history/features_all_tickers_timeseries.parquet
+
+      - name: 📝 Commit results
+        run: |
+          git commit -m "🔄 Update generated macro and ticker features" || echo "No changes"
+
+      - name: 🚀 Push results
+        run: |
+          git push origin HEAD:data-artifacts || echo "Push skipped (no changes)"
