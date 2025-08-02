@@ -213,11 +213,10 @@ def generate_features_for_ticker(ticker: str, all_dates: List[date]):
 
     for as_of in all_dates:
         if as_of in existing_dates:
-            if OVERWRITE_MODE == "none":
-                results.append(f"[SKIP] {ticker}@{as_of} already exists")
+            if OVERWRITE_MODE in {"none", "append"}:
+                results.append(f"[SKIP] {ticker}@{as_of} already exists (append mode)")
                 continue
             elif OVERWRITE_MODE == "partial" and existing_df is not None:
-                # Remove the old row for this date so it can be replaced
                 existing_df = existing_df.filter(pl.col("as_of") != as_of)
 
         for attempt in range(1, MAX_RETRIES + 1):
