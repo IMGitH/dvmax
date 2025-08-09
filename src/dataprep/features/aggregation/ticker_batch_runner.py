@@ -8,14 +8,20 @@ from pathlib import Path
 import polars as pl
 from tqdm import tqdm
 
-from src.dataprep.fetcher.ticker_data_sources import fetch_all_per_ticker
+from src.dataprep.fetcher.ticker_data_sources import fetch_all_per_ticker, fmp_get
 from src.dataprep.features.aggregation.ticker_row_builder import build_feature_table_from_inputs
 from src.dataprep.features.aggregation.validate_dynamic_row import validate_dynamic_row
 from src.dataprep.constants import EXPECTED_COLUMNS
 
+try:
+    _ = fmp_get("/api/v3/ratios/AAPL", {"limit": 1})
+    print("✅ FMP auth OK")
+except Exception as e:
+    raise SystemExit(f"❌ FMP check failed: {e}")
+
 # === Configuration ===
-# START_DATE = date(2020, 12, 31)  # <-- adjust your backtesting start
-START_DATE = date(2023, 1, 1)  # <-- adjust your backtesting start
+START_DATE = date(2021, 12, 31)  # <-- adjust your backtesting start
+# START_DATE = date(2023, 1, 1)  # <-- adjust your backtesting start
 
 END_DATE = date.today().replace(month=12, day=31)  # e.g. last full year
 FREQ = "1Y"  # or use month intervals via custom date generation

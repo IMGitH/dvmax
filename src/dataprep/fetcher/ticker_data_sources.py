@@ -7,6 +7,44 @@ from src.dataprep.fetcher.ticker_params.splits import fetch_splits
 from src.dataprep.fetcher.ticker_params.sector import fetch_sector_index
 from src.dataprep.fetcher.client import fmp_client
 import logging
+import os, time
+import requests
+
+class FMPAuthError(RuntimeError): pass
+class FMPRateLimitError(RuntimeError): pass
+
+_API_KEY = os.getenv("FMP_API_KEY")
+if not _API_KEY:
+    raise RuntimeError("FMP_API_KEY is not set. Add it to your environment or .env file.")
+
+_session = requests.Session()
+
+def fmp_get(path: str, params: dict | None = None, max_retries: int = 3) -> dict:
+    """
+    path: e.g. '/api/v3/ratios/AAPL'
+    """
+    url = f"https://financialmodelingprep.com{path}"
+    params = dict(params or {})
+    params["apikey"] = _API_KEY
+
+    backoff = 1.0
+    for attempt in range(1, max_retries + 1):
+        r = _session.get(url, params=params, timeout=30)
+        if r.status_code == 401:
+            # Do not retry — auth is wrong or plan doesn’t allow it
+            raise FMPAuthError(f"401 from FMP for {path}. Check FMP_API_KEY / plan.")
+        if r.status_code == 429:
+            # Rate-limited — back off and retry
+            if attempt == max_retries:
+                raise FMPRateLimitError("Hit FMP rate limit repeatedly (429).")
+            time.sleep(backoff); backoff *= 2
+            continue
+
+        r.raise_for_status()
+        return r.json()
+
+    # Shouldn’t reach here
+    r.raise_for_status()
 
 
 def fetch_all_per_ticker(ticker: str, div_lookback_years: int, other_lookback_years: int) -> dict:
