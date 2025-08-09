@@ -1,24 +1,24 @@
 name: Generate Macro & Ticker Features
 
 on:
-  workflow_dispatch:  # manual trigger, or use `schedule:` for cron jobs
+  workflow_dispatch:
+
+permissions:
+  contents: write   # required to create Releases with GITHUB_TOKEN
 
 jobs:
   generate:
     runs-on: ubuntu-latest
-
     env:
       PYTHON_VERSION: "3.11"
-      OVERWRITE_MODE: "append"  # can override here
+      OVERWRITE_MODE: "append"
 
     steps:
-      - name: ⬇️ Checkout repository
-        uses: actions/checkout@v3
-        with:
-          lfs: true  # Enables Git LFS tracking
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
 
       - name: 🧪 Set up Python ${{ env.PYTHON_VERSION }}
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -28,18 +28,15 @@ jobs:
           pip install -r requirements.txt
 
       - name: 🧮 Run macro batch generation
-        run: |
-          python src/dataprep/features/aggregation/macro_batch_runner.py
+        run: python src/dataprep/features/aggregation/macro_batch_runner.py
 
       - name: 🧮 Run ticker batch generation
-        run: |
-          python src/dataprep/features/aggregation/ticker_batch_runner.py
+        run: python src/dataprep/features/aggregation/ticker_batch_runner.py
 
       - name: 🧪 Show validation failures
-        if: always()  # run even if previous steps failed
+        if: always()
         run: |
           echo "🔍 Checking for validation issues..."
-
           if compgen -G "features_data/_invalid/*.txt" > /dev/null; then
             echo "🚨 Validation failures found:"
             for f in features_data/_invalid/*.txt; do
@@ -51,22 +48,26 @@ jobs:
             echo "✅ No validation failures detected."
           fi
 
-      - name: 📂 Track output files in LFS
+      - name: 📦 Package outputs
+        id: package
         run: |
-          git lfs install
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          ts=$(date -u +'%Y%m%d_%H%M%S')
+          echo "TS=$ts" >> $GITHUB_OUTPUTS
+          tar -czf "features_${ts}.tar.gz" \
+            features_data/macro_history \
+            features_data/tickers_history \
+            features_data/tickers_static \
+            features_data/_invalid 2>/dev/null || true
+          ls -lh "features_${ts}.tar.gz"
 
-          git add features_data/macro_history/*.parquet
-          git add features_data/tickers_history/*.parquet
-          git add features_data/tickers_static/*.parquet
-          git add features_data/_invalid/*.parquet || true  # some might be empty
-          git add features_data/tickers_history/features_all_tickers_timeseries.parquet
-
-      - name: 📝 Commit results
-        run: |
-          git commit -m "🔄 Update generated macro and ticker features" || echo "No changes"
-
-      - name: 🚀 Push results
-        run: |
-          git push origin HEAD:data-artifacts || echo "Push skipped (no changes)"
+      - name: 🏷️ Create release & upload asset
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: data-${{ steps.package.outputs.TS }}
+          name: "Data snapshot ${{ steps.package.outputs.TS }}"
+          body: |
+            Automated data snapshot.
+            - Timestamp (UTC): ${{ steps.package.outputs.TS }}
+            - OVERWRITE_MODE: ${{ env.OVERWRITE_MODE }}
+          files: |
+            features_${{ steps.package.outputs.TS }}.tar.gz
