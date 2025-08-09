@@ -7,3 +7,4 @@ from src.dataprep.fetcher.ticker_params.fundamentals import (
     fetch_cashflow_statement_fund,
     fetch_income_statement_fund
     )
+from src.dataprep.fetcher._fmp_client import fmp_get

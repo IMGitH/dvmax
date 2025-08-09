@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write   # required to create Releases with GITHUB_TOKEN
+  contents: write
 
 jobs:
   generate:
@@ -12,6 +12,7 @@ jobs:
     env:
       PYTHON_VERSION: "3.11"
       OVERWRITE_MODE: "append"
+      FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
 
     steps:
       - name: ⬇️ Checkout
@@ -27,11 +28,51 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: 🔎 FMP preflight
+        id: preflight
+        continue-on-error: true
+        run: |
+          set -e
+          python tools/fmp_preflight.py | tee preflight.log
+          code=$?; echo "code=$code" >> $GITHUB_OUTPUT
+          if [ $code -ne 0 ]; then
+            echo "kind=$(cut -d: -f1 preflight.log)" >> $GITHUB_OUTPUT
+          else
+            echo "kind=OK" >> $GITHUB_OUTPUT
+          fi
+          exit $code
+
+      # Optional: if preflight fails on PLAN or AUTH, stop early (hard fail).
+      - name: ❌ Stop on hard FMP failures
+        if: steps.preflight.outputs.code != '0' && (steps.preflight.outputs.kind == 'PLAN' || steps.preflight.outputs.kind == 'AUTH')
+        run: |
+          echo "Hard failure: ${ { steps.preflight.outputs.kind } } — not retryable."
+          exit 1
+
+      # If RATE/SERVER/OTHER, attempt a controlled retry for tickers
       - name: 🧮 Run macro batch generation
+        # macro step might not require FMP; keep it independent
+        if: steps.preflight.outputs.kind == 'OK' || steps.preflight.outputs.kind == 'RATE' || steps.preflight.outputs.kind == 'SERVER' || steps.preflight.outputs.kind == 'OTHER'
         run: python src/dataprep/features/aggregation/macro_batch_runner.py
 
-      - name: 🧮 Run ticker batch generation
-        run: python src/dataprep/features/aggregation/ticker_batch_runner.py
+      - name: 🧮 Run ticker batch generation with backoff
+        id: tickers
+        if: steps.preflight.outputs.kind == 'OK' || steps.preflight.outputs.kind == 'RATE' || steps.preflight.outputs.kind == 'SERVER' || steps.preflight.outputs.kind == 'OTHER'
+        run: |
+          set +e
+          tries=3
+          for i in $(seq 1 $tries); do
+            echo "Attempt $i/$tries..."
+            python src/dataprep/features/aggregation/ticker_batch_runner.py && ok=1 && break
+            sleep $(( 20 * i ))
+          done
+          if [ "${ok:-0}" != "1" ]; then
+            echo "tickers_ok=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          echo "tickers_ok=true" >> $GITHUB_OUTPUT
+          exit 0
+        continue-on-error: true
 
       - name: 🧪 Show validation failures
         if: always()
@@ -48,11 +89,25 @@ jobs:
             echo "✅ No validation failures detected."
           fi
 
+      - name: 💾 Upload partial results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: features_partial
+          path: |
+            features_data/macro_history
+            features_data/tickers_history
+            features_data/tickers_static
+            features_data/_invalid
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: 📦 Package outputs
         id: package
+        if: success()    # only package if everything succeeded
         run: |
           ts=$(date -u +'%Y%m%d_%H%M%S')
-          echo "TS=$ts" >> $GITHUB_OUTPUTS
+          echo "TS=$ts" >> $GITHUB_OUTPUT
           tar -czf "features_${ts}.tar.gz" \
             features_data/macro_history \
             features_data/tickers_history \
@@ -61,6 +116,7 @@ jobs:
           ls -lh "features_${ts}.tar.gz"
 
       - name: 🏷️ Create release & upload asset
+        if: success()
         uses: softprops/action-gh-release@v2
         with:
           tag_name: data-${{ steps.package.outputs.TS }}
