@@ -9,3 +9,4 @@ output/
 
 # Generated data
 features_data/
+features_data/tickers_history/*.parquet
