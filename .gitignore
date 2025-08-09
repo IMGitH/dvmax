@@ -6,3 +6,6 @@ data/*/*.png
 __pycache__/
 output/
 .coverage
+
+# Generated data
+features_data/
