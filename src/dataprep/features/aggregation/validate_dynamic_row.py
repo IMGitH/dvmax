@@ -1,101 +1,124 @@
+# src/dataprep/features/aggregation/validate_dynamic_row.py
 from __future__ import annotations
-
-from typing import Optional, Tuple, List, Dict
+from typing import Iterable, Tuple, List, Optional
 import polars as pl
 
-SECTOR_BOUNDS: Dict[str, Dict[str, float]] = {
-    "Financial Services":      {"pfcf_ratio_hi": 600.0, "nde_hi": 30.0},
-    "Financials":              {"pfcf_ratio_hi": 600.0, "nde_hi": 30.0},
-    "Industrials":             {"pfcf_ratio_hi": 500.0, "nde_hi": 25.0},
-    "Technology":              {"pfcf_ratio_hi": 800.0, "nde_hi": 20.0},
-    "Communication Services":  {"pfcf_ratio_hi": 700.0, "nde_hi": 20.0},
-    "Consumer Discretionary":  {"pfcf_ratio_hi": 700.0, "nde_hi": 20.0},
-    "Consumer Staples":        {"pfcf_ratio_hi": 500.0, "nde_hi": 15.0},
-    "Health Care":             {"pfcf_ratio_hi": 700.0, "nde_hi": 20.0},
-    "Energy":                  {"pfcf_ratio_hi": 400.0, "nde_hi": 15.0},
-    "Materials":               {"pfcf_ratio_hi": 500.0, "nde_hi": 20.0},
-    "Real Estate":             {"pfcf_ratio_hi": 500.0, "nde_hi": 25.0},
-    "Utilities":               {"pfcf_ratio_hi": 400.0, "nde_hi": 15.0},
-    "_default":                {"pfcf_ratio_hi": 600.0, "nde_hi": 20.0},
+# Minimal, conservative ranges; expand if needed
+FEATURE_RANGES = {
+    "dividend_yield": (0.0, 0.25),            # 0% – 25%
+    "pfcf_ratio": (0.0, 300.0),               # 0 – 300
+    "net_debt_to_ebitda": (-10.0, 20.0),      # broad, allows negs for net cash
 }
 
-EPS = {"fcf": 1.0, "ebitda": 1.0}
+# thresholds under which a ratio is unreliable -> nullify instead of flagging
+# tuned to tests (FCF=0.2, EBITDA=0.4 should nullify)
+_TINY_FCF = 1.0
+_TINY_EBITDA = 1.0
+_TINY = 1e-6
 
-REL_CHANGE_MAX = {
-    "pfcf_ratio": 8.0,
-    "net_debt_to_ebitda": 15.0,
-}
 
-def _get_bounds(sector: Optional[str]) -> Dict[str, float]:
-    return SECTOR_BOUNDS.get(sector or "", SECTOR_BOUNDS["_default"])
+def _in_range(val: Optional[float], lo: float, hi: float) -> bool:
+    if val is None:
+        return True  # None is handled elsewhere; not a violation here
+    try:
+        return (val > lo) and (val < hi)
+    except Exception:
+        return True
 
-def _near_zero_series(s: pl.Series, eps: float) -> pl.Series:
-    return s.abs().is_between(-eps, eps)
 
-def _relative_jump(cur: float, prev: float, eps: float = 1.0) -> float:
-    return abs(cur - prev) / max(abs(prev), eps)
+def _maybe_nullify_unstable_ratios(df: pl.DataFrame, violations: List[str]) -> pl.DataFrame:
+    out = df
+
+    # pfcf: tiny free_cash_flow -> nullify pfcf_ratio
+    if "free_cash_flow" in out.columns and "pfcf_ratio" in out.columns:
+        fcf = out["free_cash_flow"].to_list()[0] if not out.is_empty() else None
+        if fcf is not None and abs(float(fcf)) <= _TINY_FCF:
+            out = out.with_columns(pl.lit(None).alias("pfcf_ratio"))
+            violations.append("pfcf_ratio_nullified_tiny_fcf")
+
+    # net_debt_to_ebitda: tiny ebitda -> nullify net_debt_to_ebitda
+    if "ebitda" in out.columns and "net_debt_to_ebitda" in out.columns:
+        e = out["ebitda"].to_list()[0] if not out.is_empty() else None
+        if e is not None and abs(float(e)) <= _TINY_EBITDA:
+            out = out.with_columns(pl.lit(None).alias("net_debt_to_ebitda"))
+            violations.append("nde_nullified_tiny_ebitda")
+
+    return out
+
+
+def _check_ranges(df: pl.DataFrame, violations: List[str]) -> None:
+    # Check each configured feature when present
+    row = {c: (df[c].to_list()[0] if c in df.columns and not df.is_empty() else None) for c in FEATURE_RANGES.keys()}
+    for col, (lo, hi) in FEATURE_RANGES.items():
+        val = row.get(col, None)
+        if val is None:
+            continue
+        try:
+            v = float(val)
+        except Exception:
+            continue
+        if not _in_range(v, lo, hi):
+            violations.append(f"{col} out-of-bounds: {v} not in ({lo}, {hi})")
+
+
+def _check_relative_jumps(df: pl.DataFrame, prev_df: Optional[pl.DataFrame], violations: List[str]) -> None:
+    if prev_df is None or prev_df.is_empty():
+        return
+
+    def _rel_jump(col: str, limit: float) -> None:
+        if col not in df.columns or col not in prev_df.columns:
+            return
+        cur = df[col].to_list()[0]
+        prev = prev_df[col].to_list()[-1]
+        if cur is None or prev is None:
+            return
+        try:
+            curf, prevf = float(cur), float(prev)
+        except Exception:
+            return
+        if abs(prevf) < _TINY:
+            return
+        ratio = abs(curf / prevf)
+        if ratio > limit:
+            violations.append(f"{col} abnormal change: {prevf:.4f} → {curf:.4f} (×{ratio:.2f})")
+
+    # gentle limits; tune as needed
+    _rel_jump("pfcf_ratio", 15.0)
+    _rel_jump("net_debt_to_ebitda", 25.0)
+    _rel_jump("dividend_yield", 10.0)   # <-- add yield trend check
+
+
 
 def validate_dynamic_row(
-    df: pl.DataFrame,
+    dynamic_df: pl.DataFrame,
     ticker: str,
     prev_df: Optional[pl.DataFrame] = None,
     sector: Optional[str] = None,
 ) -> Tuple[str, List[str], pl.DataFrame]:
     """
-    Soft validation only:
-      - Returns (status, violations, df)
-      - status ∈ {'ok','flagged'}
-      - Never raises; never marks fatal
-      - If denominators are tiny, set the derived ratio to None and flag
+    Soft validator:
+      - never raises
+      - returns ("ok" | "flagged", violations, possibly_mutated_df)
+
+    Mutations:
+      - nullifies unstable ratios when denominators are tiny
+    Flags:
+      - range violations (FEATURE_RANGES)
+      - large relative jumps vs prev_df (lightweight)
     """
+    if not isinstance(dynamic_df, pl.DataFrame) or dynamic_df.is_empty():
+        return "ok", [], dynamic_df
+
     violations: List[str] = []
 
-    # Denominator guards
-    if "pfcf_ratio" in df.columns and "free_cash_flow" in df.columns:
-        tiny_fcf = _near_zero_series(df["free_cash_flow"], EPS["fcf"])
-        if tiny_fcf.any():
-            df = df.with_columns([
-                pl.when(tiny_fcf).then(pl.lit(None)).otherwise(pl.col("pfcf_ratio")).alias("pfcf_ratio")
-            ])
-            violations.append("pfcf_ratio_nullified_tiny_fcf")
+    # 1) Nullify unstable ratios based on tiny denominators
+    out = _maybe_nullify_unstable_ratios(dynamic_df, violations)
 
-    if "net_debt_to_ebitda" in df.columns and "ebitda" in df.columns:
-        tiny_ebitda = _near_zero_series(df["ebitda"], EPS["ebitda"])
-        if tiny_ebitda.any():
-            df = df.with_columns([
-                pl.when(tiny_ebitda).then(pl.lit(None)).otherwise(pl.col("net_debt_to_ebitda")).alias("net_debt_to_ebitda")
-            ])
-            violations.append("nde_nullified_tiny_ebitda")
+    # 2) Hard ranges (soft-flag)
+    _check_ranges(out, violations)
 
-    # Sector-aware soft bounds (flags only)
-    bounds = _get_bounds(sector)
-
-    def _flag_oob(col: str, hi_key: str, label: str):
-        if col in df.columns:
-            s = df[col].drop_nulls()
-            if len(s) > 0 and (s > bounds[hi_key]).any():
-                try:
-                    v = float(s.filter(s > bounds[hi_key]).to_list()[0])
-                    violations.append(f"{label}_oob>{bounds[hi_key]}:{v:.4f}")
-                except Exception:
-                    violations.append(f"{label}_oob>{bounds[hi_key]}")
-
-    _flag_oob("pfcf_ratio", "pfcf_ratio_hi", "pfcf_ratio")
-    _flag_oob("net_debt_to_ebitda", "nde_hi", "net_debt_to_ebitda")
-
-    # Relative change flags vs previous row
-    if prev_df is not None and prev_df.height > 0:
-        prev_sorted = prev_df.sort("as_of")
-        for col, max_jump in REL_CHANGE_MAX.items():
-            if col in df.columns and col in prev_sorted.columns:
-                prev_series = prev_sorted[col].drop_nulls()
-                cur_series  = df[col].drop_nulls()
-                if len(prev_series) > 0 and len(cur_series) > 0:
-                    prev_last = float(prev_series[-1])
-                    cur = float(cur_series[0])
-                    rel = _relative_jump(cur, prev_last, eps=1.0)
-                    if rel > max_jump:
-                        violations.append(f"{col}_jump:{rel:.2f}x")
+    # 3) Relative jumps w.r.t previous row (soft-flag)
+    _check_relative_jumps(out, prev_df, violations)
 
     status = "flagged" if violations else "ok"
-    return status, violations, df
+    return status, violations, out

@@ -176,31 +176,70 @@ def save_or_append(df: pl.DataFrame, ticker: str, merge_with_existing: bool = Tr
 
     if merge_with_existing and os.path.exists(path):
         df_existing = pl.read_parquet(path)
+
+        # Ensure validation cols exist on existing file as Utf8 empty strings
+        for c in ("validation_status", "violations"):
+            if c not in df_existing.columns:
+                df_existing = df_existing.with_columns(pl.lit("").cast(pl.Utf8).alias(c))
+
+        # Align columns
         all_columns = sorted(set(df.columns) | set(df_existing.columns))
         df = fill_missing_columns(df, all_columns)
         df_existing = fill_missing_columns(df_existing, all_columns)
 
+        # Normalize numerics (keeps strings intact)
         df = cast_and_round_numeric(df)
         df_existing = cast_and_round_numeric(df_existing)
 
+        # Harmonize dtypes
         cast_schema = {}
         for col in all_columns:
-            dtype_existing = df_existing[col].dtype
-            dtype_new = df[col].dtype
-            if dtype_existing != dtype_new:
-                if is_numeric_dtype(dtype_existing) and is_numeric_dtype(dtype_new):
-                    cast_schema[col] = pl.Float32
+            de = df_existing[col].dtype
+            dn = df[col].dtype
+            if de != dn:
+                if is_numeric_dtype(de) and is_numeric_dtype(dn):
+                    target = pl.Float32
                 else:
-                    cast_schema[col] = dtype_existing
+                    if de == pl.Null and dn != pl.Null:
+                        target = dn
+                    elif dn == pl.Null and de != pl.Null:
+                        target = de
+                    elif de == pl.Utf8 or dn == pl.Utf8:
+                        target = pl.Utf8
+                    elif de == pl.Boolean or dn == pl.Boolean:
+                        target = pl.Boolean
+                    else:
+                        target = de
+                cast_schema[col] = target
         if cast_schema:
             df = df.cast(cast_schema)
             df_existing = df_existing.cast(cast_schema)
 
+        # Merge
         combined = pl.concat([df_existing, df], how="vertical").unique(subset=["as_of"])
+
+        # FINAL GUARANTEES for validation cols:
+        #  - Utf8 dtype
+        #  - Preserve any non-empty values; default to "" only if truly null
+        if "validation_status" in combined.columns:
+            combined = combined.with_columns(
+                pl.coalesce([pl.col("validation_status").cast(pl.Utf8), pl.lit("")]).alias("validation_status")
+            )
+        else:
+            combined = combined.with_columns(pl.lit("").alias("validation_status"))
+
+        if "violations" in combined.columns:
+            combined = combined.with_columns(
+                pl.coalesce([pl.col("violations").cast(pl.Utf8), pl.lit("")]).alias("violations")
+            )
+        else:
+            combined = combined.with_columns(pl.lit("").alias("violations"))
+
         prev_height = df_existing.height
         df = combined
     else:
         df = cast_and_round_numeric(df)
+
 
     df = df.sort("as_of")
     new_height = df.height
@@ -293,25 +332,31 @@ def generate_features_for_ticker(ticker: str, all_dates: List[date]) -> tuple[st
                     dynamic_df, ticker, prev_df=existing_df, sector=sector
                 )
 
-                # Annotate + audit (for flagged)
+                # Annotate + audit
                 if status == "flagged":
                     audit_path = os.path.join(AUDIT_DIR, f"{ticker}_{as_of}.txt")
                     with open(audit_path, "w") as f:
                         for v in violations:
                             f.write(v + "\n")
-                    dynamic_df = dynamic_df.with_columns([
+
+                    viol_str = "|".join(violations) if violations else ""
+                    dynamic_df = dynamic_df.with_columns(
                         pl.lit("flagged").alias("validation_status"),
-                        pl.lit("|").join(pl.Series(violations)).alias("violations"),
-                    ])
+                        pl.lit(viol_str).alias("violations"),
+                    )
                     results.append(f"[FLAGGED] {ticker}@{as_of}: " + "; ".join(violations))
                 else:
-                    dynamic_df = dynamic_df.with_columns([
+                    dynamic_df = dynamic_df.with_columns(
                         pl.lit("ok").alias("validation_status"),
                         pl.lit("").alias("violations"),
-                    ])
-                    results.append(f"[OK] {ticker}@{as_of}")
+                    )
 
+                # keep canonical col order AFTER annotation
+                dynamic_df = dynamic_df.select(
+                    ["ticker", "as_of"] + [c for c in dynamic_df.columns if c not in ("ticker", "as_of")]
+                )
                 collected.append(dynamic_df)
+
 
                 # Save static row only once
                 if not static_written:

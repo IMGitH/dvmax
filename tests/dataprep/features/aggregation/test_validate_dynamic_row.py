@@ -52,19 +52,21 @@ def test_valid_passes():
     df = make_valid_df()
     validate_dynamic_row(df, ticker="MOCK")  # should not raise
 
-def test_range_violation_raises():
+def test_range_violation_flags_instead_of_raises():
     df = make_invalid_range_df()
-    with pytest.raises(ValueError, match="dividend_yield out-of-bounds"):
-        validate_dynamic_row(df, ticker="MOCK")
+    status, violations, out = validate_dynamic_row(df, "XYZ", prev_df=None, sector="Technology")
+    assert status == "flagged"
+    assert any("dividend_yield out-of-bounds" in v for v in violations)
 
-def test_trend_violation_raises():
+def test_trend_violation_flags_instead_of_raises():
     current = pl.DataFrame({
         "as_of": [date(2024, 12, 31)],
-        "dividend_yield": [0.2],  # within range
+        "dividend_yield": [0.2],  # within absolute range but big jump
     })
     previous = pl.DataFrame({
         "as_of": [date(2023, 12, 31)],
-        "dividend_yield": [0.01],  # drastic increase to trigger trend alert
+        "dividend_yield": [0.01],  # drastic increase
     })
-    with pytest.raises(ValueError, match="abnormal change"):
-        validate_dynamic_row(current, ticker="MOCK", prev_df=previous)
+    status, violations, _ = validate_dynamic_row(current, "XYZ", prev_df=previous, sector="Technology")
+    assert status == "flagged"
+    assert any("dividend_yield abnormal change" in v for v in violations)
