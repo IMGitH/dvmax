@@ -6,12 +6,18 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: features-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   generate:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     env:
       PYTHON_VERSION: "3.11"
       OVERWRITE_MODE: "append"
+      STRICT: "1"
       FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
 
     steps:
@@ -32,22 +38,39 @@ jobs:
         id: preflight
         continue-on-error: true
         run: |
-          set -e
+          set -eo pipefail
           python tools/fmp_preflight.py | tee preflight.log
-          code=$?; echo "code=$code" >> $GITHUB_OUTPUT
+          code=${PIPESTATUS[0]}
+          echo "code=$code" >> "$GITHUB_OUTPUT"
           if [ $code -ne 0 ]; then
-            echo "kind=$(cut -d: -f1 preflight.log)" >> $GITHUB_OUTPUT
+            kind=$(cut -d: -f1 preflight.log | head -n1)
+            echo "kind=$kind" >> "$GITHUB_OUTPUT"
           else
-            echo "kind=OK" >> $GITHUB_OUTPUT
+            echo "kind=OK" >> "$GITHUB_OUTPUT"
           fi
           exit $code
 
-      # Optional: if preflight fails on PLAN or AUTH, stop early (hard fail).
       - name: ❌ Stop on hard FMP failures
         if: steps.preflight.outputs.code != '0' && (steps.preflight.outputs.kind == 'PLAN' || steps.preflight.outputs.kind == 'AUTH')
         run: |
-          echo "Hard failure: ${ { steps.preflight.outputs.kind } } — not retryable."
+          echo "Hard failure: ${{ steps.preflight.outputs.kind }} — not retryable."
           exit 1
+
+
+      - name: ♻️ Restore latest snapshot (if exists)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          tag=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' || true)
+          if [ -n "$tag" ]; then
+            echo "Found latest release: $tag"
+            gh release download "$tag" -p 'features_*.tar.gz' || exit 0
+            tar -xzf features_*.tar.gz || true
+            ls -R features_data || true
+          else
+            echo "No previous snapshot; starting fresh."
+          fi
 
       # If RATE/SERVER/OTHER, attempt a controlled retry for tickers
       - name: 🧮 Run macro batch generation
@@ -55,24 +78,29 @@ jobs:
         if: steps.preflight.outputs.kind == 'OK' || steps.preflight.outputs.kind == 'RATE' || steps.preflight.outputs.kind == 'SERVER' || steps.preflight.outputs.kind == 'OTHER'
         run: python src/dataprep/features/aggregation/macro_batch_runner.py
 
-      - name: 🧮 Run ticker batch generation with backoff
-        id: tickers
+      - name: 🧮 Run ticker batch generation
         if: steps.preflight.outputs.kind == 'OK' || steps.preflight.outputs.kind == 'RATE' || steps.preflight.outputs.kind == 'SERVER' || steps.preflight.outputs.kind == 'OTHER'
+        env:
+          FORCE_MERGE: "0"
+          OVERWRITE_MODE: "append"
+        run: python src/dataprep/features/aggregation/ticker_batch_runner.py
+
+
+      - name: 🗂️ Build processed tickers ledger
+        if: always()
         run: |
-          set +e
-          tries=3
-          for i in $(seq 1 $tries); do
-            echo "Attempt $i/$tries..."
-            python src/dataprep/features/aggregation/ticker_batch_runner.py && ok=1 && break
-            sleep $(( 20 * i ))
-          done
-          if [ "${ok:-0}" != "1" ]; then
-            echo "tickers_ok=false" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-          echo "tickers_ok=true" >> $GITHUB_OUTPUT
-          exit 0
-        continue-on-error: true
+          python - <<'PY'
+          import json, glob
+          from pathlib import Path
+          done = {}
+          for p in glob.glob("features_data/tickers_history/*.parquet"):
+              t = Path(p).stem
+              done[t] = "ok"
+          Path("features_data/status").mkdir(parents=True, exist_ok=True)
+          Path("features_data/status/processed.json").write_text(json.dumps(done, indent=2))
+          print("Wrote features_data/status/processed.json with", len(done), "tickers")
+          PY
+
 
       - name: 🧪 Show validation failures
         if: always()
@@ -89,6 +117,17 @@ jobs:
             echo "✅ No validation failures detected."
           fi
 
+      - name: 📎 Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs
+          path: |
+            preflight.log
+            **/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: 💾 Upload partial results on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -99,20 +138,22 @@ jobs:
             features_data/tickers_history
             features_data/tickers_static
             features_data/_invalid
+            features_data/status/processed.json
           if-no-files-found: ignore
           retention-days: 7
 
       - name: 📦 Package outputs
         id: package
-        if: success()    # only package if everything succeeded
+        if: success()
         run: |
           ts=$(date -u +'%Y%m%d_%H%M%S')
-          echo "TS=$ts" >> $GITHUB_OUTPUT
+          echo "TS=$ts" >> "$GITHUB_OUTPUT"
           tar -czf "features_${ts}.tar.gz" \
             features_data/macro_history \
             features_data/tickers_history \
             features_data/tickers_static \
-            features_data/_invalid 2>/dev/null || true
+            features_data/_invalid \
+            features_data/status/processed.json 2>/dev/null || true
           ls -lh "features_${ts}.tar.gz"
 
       - name: 🏷️ Create release & upload asset
@@ -127,3 +168,12 @@ jobs:
             - OVERWRITE_MODE: ${{ env.OVERWRITE_MODE }}
           files: |
             features_${{ steps.package.outputs.TS }}.tar.gz
+
+      - name: 🗄️ Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-${{ env.PYTHON_VERSION }}-
+            pip-

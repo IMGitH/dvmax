@@ -14,6 +14,25 @@ from src.dataprep.features.aggregation.ticker_row_builder import build_feature_t
 from src.dataprep.features.aggregation.validate_dynamic_row import validate_dynamic_row
 from src.dataprep.constants import EXPECTED_COLUMNS
 
+from dataclasses import dataclass, asdict
+import json, sys
+
+@dataclass
+class RunStats:
+    ok: int = 0
+    skipped: int = 0
+    invalid: int = 0
+    failed: int = 0
+    changed_tickers: int = 0
+
+    def update_from_lines(self, lines: list[str]) -> None:
+        for ln in lines:
+            if ln.startswith("[OK] "): self.ok += 1
+            elif ln.startswith("[SKIP] "): self.skipped += 1
+            elif ln.startswith("[INVALID] "): self.invalid += 1
+            elif ln.startswith("[FAIL] "): self.failed += 1
+
+
 try:
     _ = fmp_get("/api/v3/ratios/AAPL", {"limit": 1})
     print("✅ FMP auth OK")
@@ -235,7 +254,7 @@ def fetch_and_build_features(ticker: str, as_of: date) -> tuple[pl.DataFrame, pl
 
     return dynamic_df, static_df
 
-def generate_features_for_ticker(ticker: str, all_dates: List[date]) -> tuple[str, bool]:
+def generate_features_for_ticker(ticker: str, all_dates: List[date]) -> tuple[str, bool, RunStats]:
     """
     Returns (log_text, changed_flag).
     changed_flag is True if per-ticker parquet was updated.
@@ -314,7 +333,14 @@ def generate_features_for_ticker(ticker: str, all_dates: List[date]) -> tuple[st
         # overwrite mode → do not merge with existing
         changed = save_or_append(full_df, ticker, merge_with_existing=(OVERWRITE_MODE != "overwrite"))
 
-    return "\n".join(results), changed
+    # Build stats for this ticker based on the message lines
+    lines = results
+    ticker_stats = RunStats()
+    ticker_stats.update_from_lines(lines)
+    if changed:
+        ticker_stats.changed_tickers = 1
+
+    return "\n".join(results), changed, ticker_stats
 
 
 def has_enough_price_data(inputs: dict, as_of: date, required_days: int = 260) -> bool:
@@ -371,6 +397,20 @@ def merge_all_feature_vectors(force_merge: bool = False):
     merged_df.write_parquet(merged_file)
     print(f"✅ Merged {len(paths)} files into {merged_file}")
 
+STRICT = os.environ.get("STRICT", "0") not in ("0", "", "false", "False")
+
+def _write_status_files(stats: RunStats):
+    os.makedirs("features_data/status", exist_ok=True)
+
+    # processed.json (ledger)
+    from glob import glob
+    from pathlib import Path as _Path
+    done = { _Path(p).stem: "ok" for p in glob("features_data/tickers_history/*.parquet") }
+    _Path("features_data/status/processed.json").write_text(json.dumps(done, indent=2))
+
+    # last_run.json (summary)
+    _Path("features_data/status/last_run.json").write_text(json.dumps(asdict(stats), indent=2))
+
 
 def main():
     ensure_output_dir()
@@ -379,16 +419,42 @@ def main():
     print(f"🟢 Generating features for {len(tickers)} tickers × {len(all_dates)} dates...")
 
     any_changed = False
+    agg = RunStats()
+
     for ticker in tqdm(tickers, desc="Processing tickers"):
-        message, changed = generate_features_for_ticker(ticker, all_dates)
+        message, changed, tstats = generate_features_for_ticker(ticker, all_dates)
         any_changed = any_changed or changed
+        # aggregate
+        agg.ok += tstats.ok
+        agg.skipped += tstats.skipped
+        agg.invalid += tstats.invalid
+        agg.failed += tstats.failed
+        agg.changed_tickers += tstats.changed_tickers
+
         if message:
             tqdm.write(message)
         time.sleep(SLEEP_BETWEEN_CALLS)
 
     merge_all_feature_vectors(force_merge=FORCE_MERGE or any_changed)
+
+    # Persist status files for the workflow
+    _write_status_files(agg)
+
+    # Print concise summary
+    print(
+        f"🏁 Summary: ok={agg.ok}, skipped={agg.skipped}, invalid={agg.invalid}, "
+        f"failed={agg.failed}, changed_tickers={agg.changed_tickers}"
+    )
     print(f"All dates generated: {[d.isoformat() for d in get_dates_between(START_DATE, END_DATE)]}")
 
+    # Exit policy:
+    # - default: succeed even with invalid (quarantined) rows, but fail on hard failures
+    # - STRICT=1: fail if invalid > 0 or failed > 0
+    if STRICT:
+        sys.exit(1 if (agg.invalid > 0 or agg.failed > 0) else 0)
+    else:
+        sys.exit(1 if agg.failed > 0 else 0)
 
 if __name__ == "__main__":
     main()
+
