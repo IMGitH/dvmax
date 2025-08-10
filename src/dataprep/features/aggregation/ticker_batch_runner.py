@@ -35,12 +35,17 @@ class RunStats:
             elif ln.startswith("[FAIL] "): self.failed += 1
 
 
-# ---------------- Preflight ----------------
-try:
-    _ = fmp_get("/api/v3/ratios/AAPL", {"limit": 1})
-    print("✅ FMP auth OK")
-except Exception as e:
-    raise SystemExit(f"❌ FMP check failed: {e}")
+def _maybe_preflight_fmp():
+    """Run FMP preflight unless disabled via env."""
+    if os.environ.get("FMP_PREFLIGHT", "1") in ("0", "false", "False"):
+        print("⏭️  Skipping FMP preflight (FMP_PREFLIGHT=0).")
+        return
+    try:
+        _ = fmp_get("/api/v3/ratios/AAPL", {"limit": 1})
+        print("✅ FMP auth OK")
+    except Exception as e:
+        # Keep behavior for CLI runs: fail fast
+        raise SystemExit(f"❌ FMP check failed: {e}")
 
 
 # === Configuration (simplified) ===
@@ -415,6 +420,7 @@ def _write_status_files(stats: RunStats):
 
 
 def main():
+    _maybe_preflight_fmp()
     ensure_output_dir()
     tickers = load_tickers(TICKERS_FILE)
     all_dates = get_dates_between(START_DATE, END_DATE)
