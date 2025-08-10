@@ -20,7 +20,8 @@ try:
 except Exception as e:
     raise SystemExit(f"❌ FMP check failed: {e}")
 
-# === Configuration ===
+
+# === Configuration (simplified) ===
 START_DATE = date(2021, 12, 31)  # <-- adjust your backtesting start
 # START_DATE = date(2023, 1, 1)  # <-- adjust your backtesting start
 
@@ -31,18 +32,22 @@ OUTPUT_DIR = "features_data/timeseries"
 TICKERS_FILE = "us_tickers_subset_limited.txt"
 SLEEP_BETWEEN_CALLS = 1.0
 MAX_RETRIES = 3
-# OVERWRITE_MODE controls how existing feature data is handled:
-# - "none": skip existing rows entirely
-# - "append": skip existing rows, append only new ones (default)
-# - "partial": overwrite rows only for dates being regenerated
-# - "all": ignore existing file completely and overwrite everything
-# - "merged": only affects final merged file, not per-ticker files
+
+# Modes:
+# - "append":    skip existing rows for each ticker/date; append new ones
+# - "overwrite": ignore existing per-ticker file; rebuild entirely
+# - "skip":      if a per-ticker file exists, skip that ticker entirely
+
 OVERWRITE_MODE = os.environ.get("OVERWRITE_MODE", "append").lower()
-VALID_OVERWRITE_MODES = {"none", "append", "partial", "all", "merged"}
+VALID_OVERWRITE_MODES = {"append", "overwrite", "skip"}
 if OVERWRITE_MODE not in VALID_OVERWRITE_MODES:
     raise ValueError(f"Invalid OVERWRITE_MODE: '{OVERWRITE_MODE}'. Must be one of {VALID_OVERWRITE_MODES}")
 
+# Force merge regardless of times; e.g. FORCE_MERGE=1 python script.py
+FORCE_MERGE = os.environ.get("FORCE_MERGE", "0") not in ("0", "", "false", "False")
+
 OUTPUT_DIR = os.path.join("features_data", "tickers_history")
+
 
 # === Utilities ===
 def save_static_row(static_df: pl.DataFrame):
@@ -131,7 +136,10 @@ def cast_and_round_numeric(df: pl.DataFrame) -> pl.DataFrame:
             cols.append(pl.col(col))
     return df.select(cols)
 
-def save_or_append(df: pl.DataFrame, ticker: str, merge_with_existing: bool = True):
+def save_or_append(df: pl.DataFrame, ticker: str, merge_with_existing: bool = True) -> bool:
+    """
+    Writes/merges the per-ticker parquet. Returns True if the file content changed.
+    """
     if not isinstance(df, pl.DataFrame):
         raise TypeError(f"[BUG] df is not a Polars DataFrame for {ticker}. Got: {type(df)}")
 
@@ -140,6 +148,8 @@ def save_or_append(df: pl.DataFrame, ticker: str, merge_with_existing: bool = Tr
 
     path = get_parquet_path(ticker)
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    prev_height = None
+    prev_mtime = os.path.getmtime(path) if os.path.exists(path) else None
 
     if merge_with_existing and os.path.exists(path):
         df_existing = pl.read_parquet(path)
@@ -149,11 +159,11 @@ def save_or_append(df: pl.DataFrame, ticker: str, merge_with_existing: bool = Tr
         df = fill_missing_columns(df, all_columns)
         df_existing = fill_missing_columns(df_existing, all_columns)
 
-        # Round and cast to Float32 first
+        # Round and cast to Float32 first for numerics
         df = cast_and_round_numeric(df)
         df_existing = cast_and_round_numeric(df_existing)
 
-        # Match dtypes exactly
+        # Harmonize dtypes
         cast_schema = {}
         for col in all_columns:
             dtype_existing = df_existing[col].dtype
@@ -163,20 +173,43 @@ def save_or_append(df: pl.DataFrame, ticker: str, merge_with_existing: bool = Tr
                     cast_schema[col] = pl.Float32
                 else:
                     cast_schema[col] = dtype_existing
-
         if cast_schema:
             df = df.cast(cast_schema)
             df_existing = df_existing.cast(cast_schema)
 
-        df = pl.concat([df_existing, df], how="vertical").unique(subset=["as_of"])
-
+        combined = pl.concat([df_existing, df], how="vertical").unique(subset=["as_of"])
+        prev_height = df_existing.height
+        df = combined
     else:
         df = cast_and_round_numeric(df)
 
     df = df.sort("as_of")
-    df.write_parquet(path, compression="zstd")
-    print(f"💾 Saved: {ticker} ({df.height} rows, compressed) → {path}")
+    new_height = df.height
 
+    # Only write if changed (height or file missing). Cheap and effective.
+    if (prev_height is None and not os.path.exists(path)) or (prev_height is not None and new_height != prev_height):
+        df.write_parquet(path, compression="zstd")
+        print(f"💾 Saved: {ticker} ({df.height} rows, compressed) → {path}")
+        return True
+
+    # Fallback to mtime-based change detection: re-write if file missing or zero rows
+    if not os.path.exists(path) or new_height == 0:
+        df.write_parquet(path, compression="zstd")
+        print(f"💾 Saved: {ticker} ({df.height} rows, compressed) → {path}")
+        return True
+
+    # If we got here and file existed with same height, we still might have new values for existing dates.
+    # Compare mtime after a safe rewrite toggle only if prev_mtime is known.
+    tmp_path = path + ".tmp"
+    df.write_parquet(tmp_path, compression="zstd")
+    same_bytes = False
+    try:
+        same_bytes = os.path.getsize(tmp_path) == os.path.getsize(path)
+    except FileNotFoundError:
+        same_bytes = False
+    os.replace(tmp_path, path)  # atomic update
+    print(f"💾 Saved: {ticker} ({df.height} rows, compressed) → {path}")
+    return not same_bytes
 
 def fetch_and_build_features(ticker: str, as_of: date) -> tuple[pl.DataFrame, pl.DataFrame]:
     inputs = fetch_all_per_ticker(ticker, div_lookback_years=5, other_lookback_years=5)
@@ -202,47 +235,51 @@ def fetch_and_build_features(ticker: str, as_of: date) -> tuple[pl.DataFrame, pl
 
     return dynamic_df, static_df
 
-def generate_features_for_ticker(ticker: str, all_dates: List[date]):
-    collected = []
-    results = []
-    static_written = False
-
-    # Load existing data to skip already-processed dates
-    existing_path = get_parquet_path(ticker)
-    existing_df = None  # <-- ensure it's always defined
+def generate_features_for_ticker(ticker: str, all_dates: List[date]) -> tuple[str, bool]:
+    """
+    Returns (log_text, changed_flag).
+    changed_flag is True if per-ticker parquet was updated.
+    """
+    # Overwrite: treat as new (ignore existing file)
+    existing_df = None
     existing_dates = set()
-    if os.path.exists(existing_path):
+    existing_path = get_parquet_path(ticker)
+
+    if OVERWRITE_MODE == "skip" and os.path.exists(existing_path):
+        return f"[SKIP TICKER] {ticker} (mode=skip, file exists)", False
+
+    if OVERWRITE_MODE != "overwrite" and os.path.exists(existing_path):
         try:
             existing_df = pl.read_parquet(existing_path)
             existing_dates = set(existing_df["as_of"].cast(pl.Date).to_list())
         except Exception as e:
             print(f"[WARN] Failed to read existing data for {ticker} – treating as new: {e}")
 
+    collected = []
+    results = []
+    static_written = False
+
     for as_of in all_dates:
-        if as_of in existing_dates:
-            if OVERWRITE_MODE in {"none", "append"}:
-                results.append(f"[SKIP] {ticker}@{as_of} already exists (append mode)")
-                continue
-            elif OVERWRITE_MODE == "partial" and existing_df is not None:
-                existing_df = existing_df.filter(pl.col("as_of") != as_of)
+        # append mode → skip dates that already exist
+        if OVERWRITE_MODE == "append" and as_of in existing_dates:
+            results.append(f"[SKIP] {ticker}@{as_of} already exists (append mode)")
+            continue
 
         for attempt in range(1, MAX_RETRIES + 1):
             try:
                 dynamic_df, static_df = fetch_and_build_features(ticker, as_of)
 
-                # Run validation here
+                # Validation (prev_df only when we have it)
                 validate_dynamic_row(dynamic_df, ticker, prev_df=existing_df)
 
-                # Add to collection for saving later
                 collected.append(dynamic_df)
 
-                # Save static row only once
                 if not static_written:
                     save_static_row(static_df)
                     static_written = True
 
                 results.append(f"[OK] {ticker}@{as_of}")
-                break  # Done for this date
+                break
 
             except ValueError as ve:
                 short_reason = str(ve).split(":")[0].replace(" ", "_").replace("[", "").replace("]", "")
@@ -253,9 +290,7 @@ def generate_features_for_ticker(ticker: str, all_dates: List[date]):
                     if "as_of" in dynamic_df.columns:
                         dynamic_df = dynamic_df.sort("as_of")
                     dynamic_df.write_parquet(quarantine_path)
-
-                    error_txt = quarantine_path.replace(".parquet", ".txt")
-                    with open(error_txt, "w") as f:
+                    with open(quarantine_path.replace(".parquet", ".txt"), "w") as f:
                         f.write(f"{ticker}@{as_of}\nReason: {ve}")
 
                 print(f"[INVALID] {ticker}@{as_of} quarantined → {quarantine_path} due to: {ve}")
@@ -272,12 +307,14 @@ def generate_features_for_ticker(ticker: str, all_dates: List[date]):
                     results.append(f"[FAIL] {ticker}@{as_of}")
                     break
 
+    changed = False
     if collected:
-        full_df = pl.concat(collected, how="vertical").unique(subset=["as_of"])
+        full_df = pl.concat(collected, how="vertical").unique(subset=["as_of"]).sort("as_of")
         print(f"[SAVE] Appending {full_df.height} new rows for {ticker}")
-        save_or_append(full_df, ticker, merge_with_existing=True)
+        # overwrite mode → do not merge with existing
+        changed = save_or_append(full_df, ticker, merge_with_existing=(OVERWRITE_MODE != "overwrite"))
 
-    return "\n".join(results)
+    return "\n".join(results), changed
 
 
 def has_enough_price_data(inputs: dict, as_of: date, required_days: int = 260) -> bool:
@@ -287,12 +324,25 @@ def has_enough_price_data(inputs: dict, as_of: date, required_days: int = 260) -
     return df.filter(pl.col("date") <= pl.lit(as_of)).height >= required_days
 
 
-def merge_all_feature_vectors(force: bool = False):
+def merge_all_feature_vectors(force_merge: bool = False):
     paths = sorted(Path(OUTPUT_DIR).glob("*.parquet"))
     if not paths:
         raise RuntimeError("No feature vector files found.")
 
-    # Determine superset of all columns
+    merged_file = os.path.join(OUTPUT_DIR, "features_all_tickers_timeseries.parquet")
+
+    def _parts_newer_than_merged() -> bool:
+        if not os.path.exists(merged_file):
+            return True
+        merged_mtime = os.path.getmtime(merged_file)
+        latest_part_mtime = max(os.path.getmtime(p) for p in paths)
+        return latest_part_mtime > merged_mtime
+
+    if not (force_merge or _parts_newer_than_merged()):
+        print("⏩ Skipped merging – merged file is up to date.")
+        return
+
+    # Build superset of columns
     all_columns = set()
     for path in paths:
         df = pl.read_parquet(path)
@@ -304,7 +354,7 @@ def merge_all_feature_vectors(force: bool = False):
         df = pl.read_parquet(path)
         df = fill_missing_columns(df, all_columns)
 
-        # Enforce consistent dtypes (float for all numerics)
+        # Enforce consistent dtypes (floats for numerics)
         schema = {}
         for col in df.columns:
             dtype = df[col].dtype
@@ -313,32 +363,13 @@ def merge_all_feature_vectors(force: bool = False):
             elif dtype in [pl.Utf8, pl.Boolean, pl.Float64, pl.Date]:
                 schema[col] = dtype
             else:
-                schema[col] = pl.Float64  # fallback to float
+                schema[col] = pl.Float64
         df = df.cast(schema)
         dfs.append(df)
 
     merged_df = pl.concat(dfs, how="vertical").sort(["ticker", "as_of"])
-
-    merged_file = os.path.join(OUTPUT_DIR, "features_all_tickers_timeseries.parquet")
-
-    def _parts_newer_than_merged() -> bool:
-        if not os.path.exists(merged_file):
-            return True
-        merged_mtime = os.path.getmtime(merged_file)
-        latest_part_mtime = max(os.path.getmtime(p) for p in paths)
-        return latest_part_mtime > merged_mtime
-
-    should_write = (
-        force
-        or OVERWRITE_MODE in ("all", "merged")
-        or _parts_newer_than_merged()
-    )
-
-    if should_write:
-        merged_df.write_parquet(merged_file)
-        print(f"✅ Merged {len(paths)} files into {merged_file}")
-    else:
-        print("⏩ Skipped merging – merged file is up to date.")
+    merged_df.write_parquet(merged_file)
+    print(f"✅ Merged {len(paths)} files into {merged_file}")
 
 
 def main():
@@ -347,13 +378,15 @@ def main():
     all_dates = get_dates_between(START_DATE, END_DATE)
     print(f"🟢 Generating features for {len(tickers)} tickers × {len(all_dates)} dates...")
 
+    any_changed = False
     for ticker in tqdm(tickers, desc="Processing tickers"):
-        message = generate_features_for_ticker(ticker, all_dates)
+        message, changed = generate_features_for_ticker(ticker, all_dates)
+        any_changed = any_changed or changed
         if message:
             tqdm.write(message)
         time.sleep(SLEEP_BETWEEN_CALLS)
 
-    merge_all_feature_vectors()
+    merge_all_feature_vectors(force_merge=FORCE_MERGE or any_changed)
     print(f"All dates generated: {[d.isoformat() for d in get_dates_between(START_DATE, END_DATE)]}")
 
 
