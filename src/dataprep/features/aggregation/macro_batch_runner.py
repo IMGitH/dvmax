@@ -5,13 +5,38 @@ from src.dataprep.fetcher.macro import WorldBankAPI
 from src.dataprep.constants import MACRO_INDICATORS
 import numpy as np
 import logging
+from datetime import date as _pyd
 
-
-def engineer_macro_features(df: pl.DataFrame, as_of: date, country: str, output_root: str) -> str:
+def engineer_macro_features(df: pl.DataFrame, as_of: _pyd, country: str, output_root: str) -> str:
     # if as of year is current year - show a warning saying that one year previous data will be used
     if as_of.year == date.today().year:
         logging.warning(f"Using data for {as_of.year - 1} as the latest available year for {country}.")
         as_of = date(as_of.year - 1, 12, 31) 
+
+    # normalize date column to pl.Date (handles object/expr/str)
+    if "date" in df.columns and df.schema["date"] != pl.Date:
+        try:
+            # fast path: non-strict cast works for many types
+            df = df.with_columns(pl.col("date").cast(pl.Date, strict=False))
+        except Exception:
+            # fallback: map various objects -> python date -> pl.Date
+            df = df.with_columns(
+                pl.col("date").map_elements(
+                    lambda v: (
+                        v if isinstance(v, _pyd)
+                        else v.date() if hasattr(v, "date")
+                        else _pyd.fromisoformat(str(v))
+                    ),
+                    return_dtype=pl.Date,
+                )
+            )
+
+    # if as of year is current year - show a warning and backfill to previous year
+    if as_of.year == _pyd.today().year:
+        logging.warning(f"Using data for {as_of.year - 1} as the latest available year for {country}.")
+        as_of = _pyd(as_of.year - 1, 12, 31)
+
+
     df = df.sort("date")
     selected_year = as_of.year
     reference_year = selected_year - 1
@@ -112,7 +137,7 @@ def engineer_macro_features(df: pl.DataFrame, as_of: date, country: str, output_
 def fetch_and_save_macro(
     country: str,
     start_year: int,
-    end_year: int = date.today().year,
+    end_year: int = _pyd.today().year,
     output_root: str = "features_data"
 ) -> str:
     macro_api = WorldBankAPI()
@@ -130,7 +155,7 @@ def fetch_and_save_macro(
 
     # 👇 Loop over multiple years
     for year in range(start_year + 2, end_year + 1):
-        as_of = date(year, 12, 31)
+        as_of = _pyd(year, 12, 31) 
         try:
             last_output_path = engineer_macro_features(
                 df=df,
