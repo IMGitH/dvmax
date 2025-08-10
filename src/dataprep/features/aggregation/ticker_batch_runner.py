@@ -18,6 +18,69 @@ from src.dataprep.features.aggregation.validate_dynamic_row import validate_dyna
 from src.dataprep.constants import EXPECTED_COLUMNS
 
 
+# ---- live progress helper ----
+import time
+# ---- live progress helper ----
+from datetime import datetime, timezone
+
+_progress_hist: list[tuple[float, int]] = []  # (timestamp, processed) in last ~2m
+
+def _update_progress_live(status_dir: str, totals: dict, counts: dict, running=None, note: str | None = None) -> None:
+    """
+    totals: {"total_tasks": int, "tickers": int, "dates": int}
+    counts: {"processed": int, "failed": int, "flagged": int}
+    running: {"ticker": str, "as_of": str} | None
+    """
+    now = time.time()
+    _progress_hist.append((now, int(counts.get("processed", 0))))
+    # keep only last 120s window
+    cutoff = now - 120
+    while _progress_hist and _progress_hist[0][0] < cutoff:
+        _progress_hist.pop(0)
+
+    eta_iso = None
+    if len(_progress_hist) >= 2:
+        dt = _progress_hist[-1][0] - _progress_hist[0][0]
+        ditems = _progress_hist[-1][1] - _progress_hist[0][1]
+        rate = (ditems / dt) if dt > 0 else 0.0
+        remaining = max(int(totals.get("total_tasks", 0)) - int(counts.get("processed", 0)), 0)
+        if rate > 0:
+            secs = int(remaining / rate)
+            eta_iso = datetime.fromtimestamp(now + secs, tz=timezone.utc).replace(microsecond=0).isoformat()
+
+    denom = max(int(totals.get("total_tasks", 0)), 1)
+    percent = round(100 * int(counts.get("processed", 0)) / denom, 2)
+
+    os.makedirs(status_dir, exist_ok=True)
+    path = os.path.join(status_dir, "progress.json")
+
+    # preserve started_at from previous writes
+    started_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    try:
+        if os.path.exists(path):
+            with open(path, "r") as f:
+                prev = json.load(f)
+                started_at = prev.get("started_at") or started_at
+    except Exception as _e:
+        print(f"[WARN] progress read failed: {_e}")
+
+    payload = {
+        "started_at": started_at,
+        "updated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "totals": totals,
+        "counts": counts,
+        "percent": percent,
+        "eta_utc": eta_iso,
+        "running": running or {},
+        "note": note or "",
+    }
+    try:
+        with open(path, "w") as f:
+            json.dump(payload, f, indent=2)
+    except Exception as _e:
+        print(f"[WARN] progress write failed: {_e}")
+
+
 # ---------------- Run stats ----------------
 @dataclass
 class RunStats:
@@ -294,7 +357,7 @@ def fetch_and_build_features(ticker: str, as_of: date) -> tuple[pl.DataFrame, pl
     return dynamic_df, static_df, sector
 
 
-def generate_features_for_ticker(ticker: str, all_dates: List[date]) -> tuple[str, bool, RunStats]:
+def generate_features_for_ticker(ticker: str, all_dates: List[date], on_progress=None) -> tuple[str, bool, RunStats]:
     """
     Returns (log_text, changed_flag, stats).
     changed_flag is True if per-ticker parquet was updated.
@@ -331,7 +394,13 @@ def generate_features_for_ticker(ticker: str, all_dates: List[date]) -> tuple[st
                 status, violations, dynamic_df = validate_dynamic_row(
                     dynamic_df, ticker, prev_df=existing_df, sector=sector
                 )
-
+                if on_progress:
+                    on_progress(
+                        status=("processed" if status in ("ok","flagged") else "failed"),
+                        flagged=(status == "flagged"),
+                        ticker=ticker,
+                        as_of=as_of,
+                    )
                 # Annotate + audit
                 if status == "flagged":
                     audit_path = os.path.join(AUDIT_DIR, f"{ticker}_{as_of}.txt")
@@ -467,17 +536,38 @@ def _write_status_files(stats: RunStats):
 def main():
     _maybe_preflight_fmp()
     ensure_output_dir()
+
     tickers = load_tickers(TICKERS_FILE)
     all_dates = get_dates_between(START_DATE, END_DATE)
+
     print(f"🟢 Generating features for {len(tickers)} tickers × {len(all_dates)} dates...")
 
     any_changed = False
     agg = RunStats()
 
+    totals = {"total_tasks": len(tickers) * len(all_dates), "tickers": len(tickers), "dates": len(all_dates)}
+    counts = {"processed": 0, "failed": 0, "flagged": 0}
+
+    def _on_progress(status: str, flagged: bool, ticker, as_of):
+        if status == "processed":
+            counts["processed"] += 1
+            if flagged:
+                counts["flagged"] += 1
+        elif status == "failed":
+            counts["failed"] += 1
+        _update_progress_live(
+            STATUS_DIR,
+            totals=totals,
+            counts=counts,
+            running={"ticker": str(ticker), "as_of": as_of.isoformat()},
+        )
+
+    # seed progress at 0%
+    _update_progress_live(STATUS_DIR, totals, counts, note="starting")
+
     for ticker in tqdm(tickers, desc="Processing tickers"):
-        message, changed, tstats = generate_features_for_ticker(ticker, all_dates)
+        message, changed, tstats = generate_features_for_ticker(ticker, all_dates, on_progress=_on_progress)
         any_changed = any_changed or changed
-        # aggregate
         agg.ok += tstats.ok
         agg.skipped += tstats.skipped
         agg.flagged += tstats.flagged
@@ -489,19 +579,14 @@ def main():
         time.sleep(SLEEP_BETWEEN_CALLS)
 
     merge_all_feature_vectors(force_merge=FORCE_MERGE or any_changed)
-
-    # Persist status files for the workflow
     _write_status_files(agg)
 
-    # Print concise summary
     print(
         f"🏁 Summary: ok={agg.ok}, skipped={agg.skipped}, flagged={agg.flagged}, "
         f"failed={agg.failed}, changed_tickers={agg.changed_tickers}"
     )
     print(f"All dates generated: {[d.isoformat() for d in get_dates_between(START_DATE, END_DATE)]}")
 
-    # Exit policy:
-    # - default & STRICT: only fail on hard failures; flagged never fails
     sys.exit(1 if agg.failed > 0 else 0)
 
 

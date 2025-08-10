@@ -32,7 +32,7 @@ jobs:
       - name: 🗄️ Cache pip dependencies
         uses: actions/cache@v4
         with:
-          path: ~/.cache/pip
+          path: ~/.cache/pipPYTHON_VERSION
           key: pip-${{ runner.os }}-${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt') }}
           restore-keys: |
             pip-${{ runner.os }}-${{ env.PYTHON_VERSION }}-
@@ -69,15 +69,20 @@ jobs:
         continue-on-error: true
         run: |
           set -eo pipefail
-          python tools/fmp_preflight.py | tee preflight.log
-          code=${PIPESTATUS[0]}
-          echo "code=$code" >> "$GITHUB_OUTPUT"
-          if [ $code -ne 0 ]; then
-            kind=$(cut -d: -f1 preflight.log | head -n1)
-            echo "kind=$kind" >> "$GITHUB_OUTPUT"
+          code=0
+          kind="OK"
+          if python tools/fmp_preflight.py | tee preflight.log; then
+            code=0; kind="OK"
           else
-            echo "kind=OK" >> "$GITHUB_OUTPUT"
+            code=${PIPESTATUS[0]:-1}
+            if [ -f preflight.log ]; then
+              kind=$(cut -d: -f1 preflight.log | head -n1 || echo "OTHER")
+            else
+              kind="OTHER"
+            fi
           fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "kind=$kind" >> "$GITHUB_OUTPUT"
           exit $code
 
       - name: ❌ Stop on hard FMP failures
@@ -120,6 +125,70 @@ jobs:
           else
             echo "✅ No flags."
           fi
+
+      - name: 🛠️ Install jq for JSON processing
+        if: always()
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: 📋 Append live progress to summary
+        if: always()
+        run: |
+          if [ -f features_data/status/progress.json ]; then
+            echo "## Data Progress" >> $GITHUB_STEP_SUMMARY
+            echo "- Percent: $(jq -r .percent features_data/status/progress.json)%" >> $GITHUB_STEP_SUMMARY
+            echo "- Processed: $(jq -r .counts.processed features_data/status/progress.json)/$(jq -r .totals.total_tasks features_data/status/progress.json)" >> $GITHUB_STEP_SUMMARY
+            echo "- Flagged: $(jq -r .counts.flagged features_data/status/progress.json)" >> $GITHUB_STEP_SUMMARY
+            echo "- Failed: $(jq -r .counts.failed features_data/status/progress.json)" >> $GITHUB_STEP_SUMMARY
+            echo "- ETA (UTC): $(jq -r .eta_utc features_data/status/progress.json)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "No progress.json found" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: 📨 Notify via GitHub Issue
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = 'features_data/status/progress.json';
+            if (!fs.existsSync(path)) {
+              core.info('progress.json not found; skipping issue notification.');
+              return;
+            }
+            const p = JSON.parse(fs.readFileSync(path,'utf8'));
+            const title = `Data snapshot ready: ${p.percent}% processed`;
+            const body = `**Data snapshot completed**
+            - Percent: ${p.percent}%
+            - Processed: ${p.counts.processed}/${p.totals.total_tasks}
+            - Flagged: ${p.counts.flagged}
+            - Failed: ${p.counts.failed}
+            - ETA (UTC): ${p.eta_utc}
+
+            cc @your-github-handle`;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body
+            });
+
+      - name: 🎯 Threshold milestones
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            if (!fs.existsSync('features_data/status/progress.json')) return;
+            const p = JSON.parse(fs.readFileSync('features_data/status/progress.json','utf8'));
+            const percent = Math.floor(p.percent || 0);
+            const hit = [50, 90].includes(percent);
+            if (!hit) return;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Milestone ${percent}% reached`,
+              body: `Processed ${p.counts.processed}/${p.totals.total_tasks} | Failed ${p.counts.failed} | ETA ${p.eta_utc || 'n/a'}`
+            });
 
       - name: 📎 Upload logs
         if: always()
