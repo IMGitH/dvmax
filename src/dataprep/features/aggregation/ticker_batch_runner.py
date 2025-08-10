@@ -9,7 +9,7 @@ import polars as pl
 from tqdm import tqdm
 
 from src.dataprep.fetcher._fmp_client import fmp_get
-from src.dataprep.fetcher.ticker_data_sources import fetch_all_per_ticker, fmp_get
+from src.dataprep.fetcher.ticker_data_sources import fetch_all_per_ticker
 from src.dataprep.features.aggregation.ticker_row_builder import build_feature_table_from_inputs
 from src.dataprep.features.aggregation.validate_dynamic_row import validate_dynamic_row
 from src.dataprep.constants import EXPECTED_COLUMNS
