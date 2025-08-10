@@ -307,12 +307,20 @@ def save_or_append(df: pl.DataFrame, ticker: str, merge_with_existing: bool = Tr
     df = df.sort("as_of")
     new_height = df.height
 
-    if (prev_height is None and not os.path.exists(path)) or (prev_height is not None and new_height != prev_height):
+    # If we merged with existing and height changed -> changed
+    if (prev_height is not None and new_height != prev_height):
         df.write_parquet(path, compression="zstd")
         print(f"💾 Saved: {ticker} ({df.height} rows, compressed) → {path}")
         return True
 
-    # Write fresh file anyway (values may change without height change)
+    # If we did NOT merge (overwrite mode) and the file already exists,
+    # treat overwrite as "changed" (content is different, even if bytes match)
+    if not merge_with_existing and os.path.exists(path):
+        df.write_parquet(path, compression="zstd")
+        print(f"💾 Saved (overwrite): {ticker} ({df.height} rows, compressed) → {path}")
+        return True
+
+    # Otherwise: do the temp write + byte-compare fallback
     tmp_path = path + ".tmp"
     df.write_parquet(tmp_path, compression="zstd")
     same_bytes = False
