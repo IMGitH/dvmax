@@ -287,7 +287,7 @@ def has_enough_price_data(inputs: dict, as_of: date, required_days: int = 260) -
     return df.filter(pl.col("date") <= pl.lit(as_of)).height >= required_days
 
 
-def merge_all_feature_vectors():
+def merge_all_feature_vectors(force: bool = False):
     paths = sorted(Path(OUTPUT_DIR).glob("*.parquet"))
     if not paths:
         raise RuntimeError("No feature vector files found.")
@@ -314,26 +314,31 @@ def merge_all_feature_vectors():
                 schema[col] = dtype
             else:
                 schema[col] = pl.Float64  # fallback to float
-
         df = df.cast(schema)
         dfs.append(df)
 
     merged_df = pl.concat(dfs, how="vertical").sort(["ticker", "as_of"])
 
     merged_file = os.path.join(OUTPUT_DIR, "features_all_tickers_timeseries.parquet")
-    if OVERWRITE_MODE in ("all", "merged") or not os.path.exists(merged_file):
+
+    def _parts_newer_than_merged() -> bool:
+        if not os.path.exists(merged_file):
+            return True
+        merged_mtime = os.path.getmtime(merged_file)
+        latest_part_mtime = max(os.path.getmtime(p) for p in paths)
+        return latest_part_mtime > merged_mtime
+
+    should_write = (
+        force
+        or OVERWRITE_MODE in ("all", "merged")
+        or _parts_newer_than_merged()
+    )
+
+    if should_write:
         merged_df.write_parquet(merged_file)
         print(f"✅ Merged {len(paths)} files into {merged_file}")
     else:
-        print(f"⏩ Skipped merging – file already exists.")
-
-
-    merged_file = os.path.join(OUTPUT_DIR, "features_all_tickers_timeseries.parquet")
-    if OVERWRITE_MODE in ("all", "merged") or not os.path.exists(merged_file):
-        merged_df.write_parquet(merged_file)
-        print(f"✅ Merged {len(paths)} files into {merged_file}")
-    else:
-        print(f"⏩ Skipped merging – file already exists.")
+        print("⏩ Skipped merging – merged file is up to date.")
 
 
 def main():
