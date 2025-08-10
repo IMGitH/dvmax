@@ -106,19 +106,19 @@ jobs:
           print("Wrote features_data/status/processed.json with", len(done), "tickers")
           PY
 
-      - name: 🧪 Show validation failures
+      - name: 🧪 Show validation flags
         if: always()
         run: |
-          echo "🔍 Checking for validation issues..."
-          if compgen -G "features_data/_invalid/*.txt" > /dev/null; then
-            echo "🚨 Validation failures found:"
-            for f in features_data/_invalid/*.txt; do
+          echo "🔍 Checking for soft validation flags..."
+          if compgen -G "features_data/_audit/*.txt" > /dev/null; then
+            echo "⚠️ Flagged rows:"
+            for f in features_data/_audit/*.txt; do
               echo ""
               echo "----- $(basename "$f") -----"
               cat "$f"
             done
           else
-            echo "✅ No validation failures detected."
+            echo "✅ No flags."
           fi
 
       - name: 📎 Upload logs
@@ -130,8 +130,10 @@ jobs:
             preflight.log
             **/*.log
             features_data/status/*.json
+            features_data/_audit/*.txt
           if-no-files-found: ignore
           retention-days: 7
+
 
       - name: 💾 Upload partial results on failure
         if: failure()
@@ -142,10 +144,11 @@ jobs:
             features_data/macro_history
             features_data/tickers_history
             features_data/tickers_static
-            features_data/_invalid
             features_data/status
+            features_data/_audit
           if-no-files-found: ignore
           retention-days: 7
+
 
       - name: 📦 Package outputs
         id: package
@@ -157,9 +160,10 @@ jobs:
             features_data/macro_history \
             features_data/tickers_history \
             features_data/tickers_static \
-            features_data/_invalid \
-            features_data/status 2>/dev/null || true
+            features_data/status \
+            features_data/_audit 2>/dev/null || true
           ls -lh "features_${ts}.tar.gz"
+
 
       - name: 🏷️ Create release & upload asset
         if: success()

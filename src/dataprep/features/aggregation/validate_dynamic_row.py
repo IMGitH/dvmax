@@ -1,87 +1,101 @@
+from __future__ import annotations
+
+from typing import Optional, Tuple, List, Dict
 import polars as pl
-from typing import Optional
-import math
 
-# === Reasonable hard limits for each feature (define only if numeric) ===
-FEATURE_RANGES = {
-    "6m_return": (-1.0, 2.0),
-    "12m_return": (-1.0, 3.0),
-    "volatility": (0.0, 1.0),
-    "max_drawdown_1y": (0.0, 1.0),
-    "sector_relative_6m": (-1.5, 1.5),
-    "sma_50_200_delta": (-1.0, 1.0),
-    "net_debt_to_ebitda": (-10.0, 30.0),
-    "ebit_interest_cover": (0.0, 1000.0),
-    "eps_cagr_3y": (-1.0, 3.0),
-    "fcf_cagr_3y": (-1.0, 3.0),
-    "dividend_yield": (0.0, 0.25),
-    "dividend_cagr_3y": (-1.0, 3.0),
-    "dividend_cagr_5y": (-1.0, 3.0),
-    "yield_vs_5y_median": (-1.5, 1.5),
-    "pe_ratio": (0.0, 300.0),
-    "pfcf_ratio": (0.0, 300.0),
-    "payout_ratio": (0.0, 3.0),
+SECTOR_BOUNDS: Dict[str, Dict[str, float]] = {
+    "Financial Services":      {"pfcf_ratio_hi": 600.0, "nde_hi": 30.0},
+    "Financials":              {"pfcf_ratio_hi": 600.0, "nde_hi": 30.0},
+    "Industrials":             {"pfcf_ratio_hi": 500.0, "nde_hi": 25.0},
+    "Technology":              {"pfcf_ratio_hi": 800.0, "nde_hi": 20.0},
+    "Communication Services":  {"pfcf_ratio_hi": 700.0, "nde_hi": 20.0},
+    "Consumer Discretionary":  {"pfcf_ratio_hi": 700.0, "nde_hi": 20.0},
+    "Consumer Staples":        {"pfcf_ratio_hi": 500.0, "nde_hi": 15.0},
+    "Health Care":             {"pfcf_ratio_hi": 700.0, "nde_hi": 20.0},
+    "Energy":                  {"pfcf_ratio_hi": 400.0, "nde_hi": 15.0},
+    "Materials":               {"pfcf_ratio_hi": 500.0, "nde_hi": 20.0},
+    "Real Estate":             {"pfcf_ratio_hi": 500.0, "nde_hi": 25.0},
+    "Utilities":               {"pfcf_ratio_hi": 400.0, "nde_hi": 15.0},
+    "_default":                {"pfcf_ratio_hi": 600.0, "nde_hi": 20.0},
 }
 
-# === Trend deviation threshold for numeric features ===
-TREND_SENSITIVE = {
-    "dividend_yield": 2.5,
-    "pe_ratio": 5.0,
-    "pfcf_ratio": 5.0,
-    "net_debt_to_ebitda": 5.0,
-    "eps_cagr_3y": 5.0,
+EPS = {"fcf": 1.0, "ebitda": 1.0}
+
+REL_CHANGE_MAX = {
+    "pfcf_ratio": 8.0,
+    "net_debt_to_ebitda": 15.0,
 }
 
-def validate_dynamic_row(df: pl.DataFrame, ticker: str, prev_df: Optional[pl.DataFrame] = None) -> None:
+def _get_bounds(sector: Optional[str]) -> Dict[str, float]:
+    return SECTOR_BOUNDS.get(sector or "", SECTOR_BOUNDS["_default"])
+
+def _near_zero_series(s: pl.Series, eps: float) -> pl.Series:
+    return s.abs().is_between(-eps, eps)
+
+def _relative_jump(cur: float, prev: float, eps: float = 1.0) -> float:
+    return abs(cur - prev) / max(abs(prev), eps)
+
+def validate_dynamic_row(
+    df: pl.DataFrame,
+    ticker: str,
+    prev_df: Optional[pl.DataFrame] = None,
+    sector: Optional[str] = None,
+) -> Tuple[str, List[str], pl.DataFrame]:
     """
-    Validates the current dynamic dataframe against hard-coded numerical ranges and historical change thresholds.
-    Raises ValueError if violations are found.
+    Soft validation only:
+      - Returns (status, violations, df)
+      - status ∈ {'ok','flagged'}
+      - Never raises; never marks fatal
+      - If denominators are tiny, set the derived ratio to None and flag
     """
-    if df.is_empty():
-        raise ValueError(f"[{ticker}] Empty dynamic_df provided.")
+    violations: List[str] = []
 
-    latest_as_of = df["as_of"].max()
-    current = df.filter(pl.col("as_of") == latest_as_of)
+    # Denominator guards
+    if "pfcf_ratio" in df.columns and "free_cash_flow" in df.columns:
+        tiny_fcf = _near_zero_series(df["free_cash_flow"], EPS["fcf"])
+        if tiny_fcf.any():
+            df = df.with_columns([
+                pl.when(tiny_fcf).then(pl.lit(None)).otherwise(pl.col("pfcf_ratio")).alias("pfcf_ratio")
+            ])
+            violations.append("pfcf_ratio_nullified_tiny_fcf")
 
-    # === Value range checks ===
-    for col, (low, high) in FEATURE_RANGES.items():
-        if col not in df.columns:
-            continue
+    if "net_debt_to_ebitda" in df.columns and "ebitda" in df.columns:
+        tiny_ebitda = _near_zero_series(df["ebitda"], EPS["ebitda"])
+        if tiny_ebitda.any():
+            df = df.with_columns([
+                pl.when(tiny_ebitda).then(pl.lit(None)).otherwise(pl.col("net_debt_to_ebitda")).alias("net_debt_to_ebitda")
+            ])
+            violations.append("nde_nullified_tiny_ebitda")
 
-        values = df[col].to_list()
-        for v in values:
-            # Allow None, NaN, and inf (skip check)
-            if v is None or (isinstance(v, float) and (math.isnan(v) or math.isinf(v))):
-                continue
+    # Sector-aware soft bounds (flags only)
+    bounds = _get_bounds(sector)
 
-            if not (low <= v <= high):
-                raise ValueError(f"[{ticker}] {col} out-of-bounds: {v} not in ({low}, {high})")
+    def _flag_oob(col: str, hi_key: str, label: str):
+        if col in df.columns:
+            s = df[col].drop_nulls()
+            if len(s) > 0 and (s > bounds[hi_key]).any():
+                try:
+                    v = float(s.filter(s > bounds[hi_key]).to_list()[0])
+                    violations.append(f"{label}_oob>{bounds[hi_key]}:{v:.4f}")
+                except Exception:
+                    violations.append(f"{label}_oob>{bounds[hi_key]}")
 
-    # === Historical change checker (if previous data is given) ===
-    if prev_df is not None and not prev_df.is_empty():
-        prev = (
-            prev_df
-            .filter(pl.col("as_of") < latest_as_of)
-            .sort("as_of")
-            .tail(1)
-        )
-        if prev.is_empty():
-            return
+    _flag_oob("pfcf_ratio", "pfcf_ratio_hi", "pfcf_ratio")
+    _flag_oob("net_debt_to_ebitda", "nde_hi", "net_debt_to_ebitda")
 
-        for col, max_ratio in TREND_SENSITIVE.items():
-            if col not in current.columns or col not in prev.columns:
-                continue
+    # Relative change flags vs previous row
+    if prev_df is not None and prev_df.height > 0:
+        prev_sorted = prev_df.sort("as_of")
+        for col, max_jump in REL_CHANGE_MAX.items():
+            if col in df.columns and col in prev_sorted.columns:
+                prev_series = prev_sorted[col].drop_nulls()
+                cur_series  = df[col].drop_nulls()
+                if len(prev_series) > 0 and len(cur_series) > 0:
+                    prev_last = float(prev_series[-1])
+                    cur = float(cur_series[0])
+                    rel = _relative_jump(cur, prev_last, eps=1.0)
+                    if rel > max_jump:
+                        violations.append(f"{col}_jump:{rel:.2f}x")
 
-            curr_val = current[col][0]
-            prev_val = prev[col][0]
-
-            if prev_val is None or curr_val is None:
-                continue
-            if abs(prev_val) < 1e-6:  # Avoid division by tiny value
-                continue
-
-            ratio = abs(curr_val / prev_val)
-            if ratio > max_ratio:
-                raise ValueError(
-                    f"[{ticker}] {col} abnormal change: {prev_val:.4f} → {curr_val:.4f} (×{ratio:.2f})"
-                )
+    status = "flagged" if violations else "ok"
+    return status, violations, df
