@@ -1,7 +1,7 @@
 import os
 import time
-import traceback
-from datetime import date
+from types import SimpleNamespace
+from datetime import date, datetime, timezone
 from typing import List
 from pathlib import Path
 from dataclasses import dataclass, asdict
@@ -18,11 +18,10 @@ from src.dataprep.features.aggregation.validate_dynamic_row import validate_dyna
 from src.dataprep.constants import EXPECTED_COLUMNS
 
 
-# ---- live progress helper ----
-import time
-# ---- live progress helper ----
-from datetime import datetime, timezone
+ACCEPT_STATUSES = {"ok", "flagged"}  # keep flagged rows, audit them
 
+
+# ---- live progress helper ----
 _progress_hist: list[tuple[float, int]] = []  # (timestamp, processed) in last ~2m
 
 def _update_progress_live(status_dir: str, totals: dict, counts: dict, running=None, note: str | None = None) -> None:
@@ -99,8 +98,8 @@ class RunStats:
 
 
 def _maybe_preflight_fmp():
-    """Run FMP preflight unless disabled via env."""
-    if os.environ.get("FMP_PREFLIGHT", "1") in ("0", "false", "False"):
+    """Run FMP preflight only if explicitly enabled via env."""
+    if os.environ.get("FMP_PREFLIGHT", "0") in ("0", "", "false", "False"):
         print("⏭️  Skipping FMP preflight (FMP_PREFLIGHT=0).")
         return
     try:
@@ -365,113 +364,105 @@ def fetch_and_build_features(ticker: str, as_of: date) -> tuple[pl.DataFrame, pl
     return dynamic_df, static_df, sector
 
 
-def generate_features_for_ticker(ticker: str, all_dates: List[date], on_progress=None) -> tuple[str, bool, RunStats]:
-    """
-    Returns (log_text, changed_flag, stats).
-    changed_flag is True if per-ticker parquet was updated.
-    """
-    existing_df = None
-    existing_dates = set()
-    existing_path = get_parquet_path(ticker)
+def _write_flagged_audit(ticker: str, as_of, errors: list, row_df: pl.DataFrame) -> None:
+    Path(AUDIT_DIR).mkdir(parents=True, exist_ok=True)
+    fname = f"{ticker}_{as_of}.txt"  # test expects this pattern
+    audit_fp = Path(AUDIT_DIR) / fname
+    with open(audit_fp, "w") as f:
+        f.write("\n".join(errors) if errors else "")
 
-    if OVERWRITE_MODE == "skip" and os.path.exists(existing_path):
-        return f"[SKIP TICKER] {ticker} (mode=skip, file exists)", False, RunStats(skipped=1)
+def _align_schemas(df1: pl.DataFrame, df2: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
+    # Ensure both DataFrames have the same columns
+    all_cols = list(dict.fromkeys(df1.columns + df2.columns))  # preserve order
+    for col in all_cols:
+        if col not in df1.columns:
+            df1 = df1.with_columns(pl.lit(None).alias(col))
+        if col not in df2.columns:
+            df2 = df2.with_columns(pl.lit(None).alias(col))
+    # Reorder columns
+    return df1.select(all_cols), df2.select(all_cols)
 
-    if OVERWRITE_MODE != "overwrite" and os.path.exists(existing_path):
-        try:
-            existing_df = pl.read_parquet(existing_path)
-            existing_dates = set(existing_df["as_of"].cast(pl.Date).to_list())
-        except Exception as e:
-            print(f"[WARN] Failed to read existing data for {ticker} – treating as new: {e}")
 
-    collected = []
-    results = []
-    static_written = False
+def generate_features_for_ticker(
+    ticker: str,
+    dates: list[date],
+    on_progress=None
+):
+    logs: list[str] = []
+    stats = RunStats()  # ok, skipped, flagged, failed, changed_tickers
 
-    for as_of in all_dates:
-        # append mode → skip dates that already exist
-        if OVERWRITE_MODE == "append" and as_of in existing_dates:
-            results.append(f"[SKIP] {ticker}@{as_of} already exists (append mode)")
+    out_fp = Path(OUTPUT_DIR) / f"{ticker}.parquet"
+    if out_fp.exists():
+        df_existing = pl.read_parquet(out_fp)
+        # Ensure legacy files have validation cols as empty strings
+        for c in ("validation_status", "violations"):
+            if c not in df_existing.columns:
+                df_existing = df_existing.with_columns(pl.lit("").cast(pl.Utf8).alias(c))
+    else:
+        df_existing = pl.DataFrame()
+
+    existing_dates = set(df_existing["as_of"].to_list()) if not df_existing.is_empty() else set()
+    keep_df = df_existing
+    changed = False
+
+    for as_of in dates:
+        if as_of in existing_dates:
+            stats.skipped += 1
+            logs.append(f"[SKIP] {ticker} {as_of} exists — skipping")
+            if on_progress:
+                on_progress(status="processed", flagged=False, ticker=ticker, as_of=as_of)
             continue
 
-        for attempt in range(1, MAX_RETRIES + 1):
-            try:
-                dynamic_df, static_df, sector = fetch_and_build_features(ticker, as_of)
+        try:
+            dyn_df, static_df, sector = fetch_and_build_features(ticker, as_of)
 
-                # Soft validation: status in {'ok','flagged'}; never fatal
-                status, violations, dynamic_df = validate_dynamic_row(
-                    dynamic_df, ticker, prev_df=existing_df, sector=sector
-                )
-                if on_progress:
-                    on_progress(
-                        status=("processed" if status in ("ok","flagged") else "failed"),
-                        flagged=(status == "flagged"),
-                        ticker=ticker,
-                        as_of=as_of,
-                    )
-                # Annotate + audit
+            status, errors, dyn_df = validate_dynamic_row(
+                dyn_df, ticker,
+                prev_df=keep_df if not keep_df.is_empty() else None,
+                sector=sector
+            )
+
+            # Ensure validation columns exist on the new row
+            dyn_df = dyn_df.with_columns([
+                pl.lit(status).cast(pl.Utf8).alias("validation_status"),
+                pl.lit(";".join(errors)).cast(pl.Utf8).alias("violations"),
+            ])
+
+            if status in ACCEPT_STATUSES:
                 if status == "flagged":
-                    audit_path = os.path.join(AUDIT_DIR, f"{ticker}_{as_of}.txt")
-                    with open(audit_path, "w") as f:
-                        for v in violations:
-                            f.write(v + "\n")
-
-                    viol_str = "|".join(violations) if violations else ""
-                    dynamic_df = dynamic_df.with_columns(
-                        pl.lit("flagged").alias("validation_status"),
-                        pl.lit(viol_str).alias("violations"),
-                    )
-                    results.append(f"[FLAGGED] {ticker}@{as_of}: " + "; ".join(violations))
+                    stats.flagged += 1
+                    _write_flagged_audit(ticker, as_of, errors, dyn_df)
                 else:
-                    dynamic_df = dynamic_df.with_columns(
-                        pl.lit("ok").alias("validation_status"),
-                        pl.lit("").alias("violations"),
-                    )
+                    stats.ok += 1
 
-                # keep canonical col order AFTER annotation
-                dynamic_df = dynamic_df.select(
-                    ["ticker", "as_of"] + [c for c in dynamic_df.columns if c not in ("ticker", "as_of")]
-                )
-                collected.append(dynamic_df)
+                # Align schemas and append
+                keep_df, dyn_df = _align_schemas(keep_df, dyn_df)
+                keep_df = pl.concat([keep_df, dyn_df], how="vertical_relaxed")
+                existing_dates.add(as_of)
+                changed = True
+                logs.append(f"[OK] {ticker} {as_of} status={status} added")
+                if on_progress:
+                    on_progress(status="processed", flagged=(status == "flagged"), ticker=ticker, as_of=as_of)
+            else:
+                logs.append(f"[SKIP] {ticker} {as_of} dropped (status={status}) errors={errors}")
+                stats.skipped += 1
+                if on_progress:
+                    on_progress(status="processed", flagged=False, ticker=ticker, as_of=as_of)
 
+        except Exception as e:
+            stats.failed += 1
+            err = f"[FAIL] {ticker} {as_of}: {type(e).__name__}: {e}"
+            logs.append(err)
+            if on_progress:
+                on_progress(status="failed", flagged=False, ticker=ticker, as_of=as_of)
+            # keep going to next date
 
-                # Save static row only once
-                if not static_written:
-                    save_static_row(static_df)
-                    static_written = True
-
-                break  # Done for this date
-
-            except ValueError as ve:
-                # Treat as a runtime/inputs failure (not validation): don't write row
-                print(f"[FAIL] {ticker}@{as_of} value error: {ve}")
-                results.append(f"[FAIL] {ticker}@{as_of}")
-                break
-
-            except Exception as e:
-                if attempt < MAX_RETRIES:
-                    print(f"[RETRY] {ticker}@{as_of} (attempt {attempt}) – {e}")
-                    time.sleep(2 * attempt)
-                else:
-                    print(f"[FAIL] {ticker}@{as_of} after {MAX_RETRIES} attempts: {e}")
-                    traceback.print_exc()
-                    results.append(f"[FAIL] {ticker}@{as_of}")
-                    break
-
-    changed = False
-    if collected:
-        full_df = pl.concat(collected, how="vertical").unique(subset=["as_of"]).sort("as_of")
-        print(f"[SAVE] Appending {full_df.height} new rows for {ticker}")
-        # overwrite mode → do not merge with existing
-        changed = save_or_append(full_df, ticker, merge_with_existing=(OVERWRITE_MODE != "overwrite"))
-
-    # Build stats for this ticker based on the message lines
-    ticker_stats = RunStats()
-    ticker_stats.update_from_lines(results)
     if changed:
-        ticker_stats.changed_tickers = 1
+        keep_df = keep_df.unique(subset=["as_of"], keep="last").sort("as_of")
+        keep_df.write_parquet(out_fp, compression="zstd")
+        stats.changed_tickers += 1
 
-    return "\n".join(results), changed, ticker_stats
+    return logs, changed, stats
 
 
 def has_enough_price_data(inputs: dict, as_of: date, required_days: int = 260) -> bool:
@@ -574,7 +565,7 @@ def main():
     _update_progress_live(STATUS_DIR, totals, counts, note="starting")
 
     for ticker in tqdm(tickers, desc="Processing tickers"):
-        message, changed, tstats = generate_features_for_ticker(ticker, all_dates, on_progress=_on_progress)
+        logs, changed, tstats = generate_features_for_ticker(ticker, all_dates, on_progress=_on_progress)
         any_changed = any_changed or changed
         agg.ok += tstats.ok
         agg.skipped += tstats.skipped
@@ -582,8 +573,8 @@ def main():
         agg.failed += tstats.failed
         agg.changed_tickers += tstats.changed_tickers
 
-        if message:
-            tqdm.write(message)
+        for ln in logs:
+            tqdm.write(ln)
         time.sleep(SLEEP_BETWEEN_CALLS)
 
     merge_all_feature_vectors(force_merge=FORCE_MERGE or any_changed)
