@@ -6,7 +6,3 @@ data/*/*.png
 __pycache__/
 output/
 .coverage
-
-# Generated data
-features_data/
-features_data/tickers_history/*.parquet

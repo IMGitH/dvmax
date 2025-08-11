@@ -1,0 +1,1 @@
+dividend_yield out-of-bounds: 0.0 not in (0.0, 0.25)
