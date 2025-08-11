@@ -186,5 +186,5 @@ def fetch_and_save_macro(
 if __name__ == "__main__":
     # Example usage
     country = "United States"
-    start_year = 2000
+    start_year = 2021
     output_path = fetch_and_save_macro(country, start_year)
