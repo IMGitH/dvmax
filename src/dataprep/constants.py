@@ -75,3 +75,9 @@ MACRO_INDICATORS = {
 
     "NE.CON.PRVT.ZS": "Private Consumption (% GDP)"  # Reflects domestic consumer demand; weak consumption signals earnings pressure in consumer-driven sectors.
 }
+
+ALL_COUNTRIES = [
+    "USA", "Canada", "UK", "Germany", "France", "Switzerland", "Japan",
+    "China", "India", "Netherlands", "Ireland", "Israel", "Spain", "Italy",
+]
+

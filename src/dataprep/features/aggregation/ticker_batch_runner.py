@@ -175,10 +175,15 @@ def is_numeric_dtype(dtype: pl.DataType) -> bool:
     ))
 
 
-def fill_missing_columns(df: pl.DataFrame, all_columns: List[str]) -> pl.DataFrame:
+def fill_missing_columns(df: pl.DataFrame, all_columns: list[str]) -> pl.DataFrame:
+    height = df.height
+    to_add = []
     for col in all_columns:
         if col not in df.columns:
-            df = df.with_columns(pl.lit(None).alias(col))
+            # keep the SAME number of rows; for empty df this adds 0-length series
+            to_add.append(pl.Series(name=col, values=[None] * height))
+    if to_add:
+        df = df.with_columns(to_add)
     return df.select(all_columns)
 
 
@@ -199,26 +204,50 @@ def save_static_row(static_df: pl.DataFrame):
 
     if os.path.exists(static_path):
         existing = pl.read_parquet(static_path)
-        all_columns = sorted(set(existing.columns) | set(static_df.columns))
-        existing = fill_missing_columns(existing, all_columns)
-        static_df = fill_missing_columns(static_df, all_columns)
-
-        cast_schema = {}
-        for col in all_columns:
-            dtype_existing = existing[col].dtype
-            dtype_new = static_df[col].dtype
-            if dtype_existing != dtype_new:
-                if is_numeric_dtype(dtype_existing) and is_numeric_dtype(dtype_new):
-                    cast_schema[col] = dtype_existing
-                else:
-                    cast_schema[col] = dtype_existing
-
-        static_df = static_df.cast(cast_schema)
-        existing = existing.cast(cast_schema)
-        combined = pl.concat([existing, static_df], how="vertical").unique(subset=["ticker"])
     else:
-        combined = cast_and_round_numeric(static_df)
+        existing = pl.DataFrame()
 
+    # Align columns
+    all_columns = sorted(set(existing.columns) | set(static_df.columns))
+    existing = fill_missing_columns(existing, all_columns)
+    static_df = fill_missing_columns(static_df, all_columns)
+
+    # Resolve a common dtype per column:
+    # - prefer non-Null
+    # - if either is Utf8 -> Utf8
+    # - if both numeric -> Int32 (compact)  [use Float32 if you prefer]
+    # - else fall back to the non-Null one
+    def _common_dtype(de: pl.DataType, dn: pl.DataType) -> pl.DataType:
+        if de == pl.Null and dn != pl.Null:
+            return dn
+        if dn == pl.Null and de != pl.Null:
+            return de
+        if de == pl.Utf8 or dn == pl.Utf8:
+            return pl.Utf8
+        if is_numeric_dtype(de) and is_numeric_dtype(dn):
+            return pl.Int32
+        if de != pl.Null:
+            return de
+        return dn
+
+    target_schema: dict[str, pl.DataType] = {}
+    for col in all_columns:
+        de = existing[col].dtype
+        dn = static_df[col].dtype
+        if de != dn:
+            target_schema[col] = _common_dtype(de, dn)
+
+    if target_schema:
+        existing = existing.cast(target_schema)
+        static_df = static_df.cast(target_schema)
+
+    # Normalize one-hots: cast to Int8 and fill missing as 0
+    ohe_cols = [c for c in all_columns if c.startswith("sector_") or c.startswith("country_")]
+    if ohe_cols:
+        existing = existing.with_columns([pl.col(c).cast(pl.Int8).fill_null(0) for c in ohe_cols])
+        static_df = static_df.with_columns([pl.col(c).cast(pl.Int8).fill_null(0) for c in ohe_cols])
+
+    combined = pl.concat([existing, static_df], how="vertical").unique(subset=["ticker"])
     combined.write_parquet(static_path, compression="zstd")
     print(f"💾 Static info saved (total: {combined.height} rows) → {static_path}")
 
@@ -404,7 +433,7 @@ def generate_features_for_ticker(
     existing_dates = set(df_existing["as_of"].to_list()) if not df_existing.is_empty() else set()
     keep_df = df_existing
     changed = False
-
+    saved_static = False
     for as_of in dates:
         if as_of in existing_dates:
             stats.skipped += 1
@@ -415,6 +444,11 @@ def generate_features_for_ticker(
 
         try:
             dyn_df, static_df, sector = fetch_and_build_features(ticker, as_of)
+
+            if not saved_static:
+                # ensure ticker col exists (it does) and dtypes are strings/ints
+                save_static_row(static_df)
+                saved_static = True
 
             status, errors, dyn_df = validate_dynamic_row(
                 dyn_df, ticker,
@@ -578,6 +612,7 @@ def main():
         time.sleep(SLEEP_BETWEEN_CALLS)
 
     merge_all_feature_vectors(force_merge=FORCE_MERGE or any_changed)
+    write_static_ohe_projection()
     _write_status_files(agg)
 
     print(
@@ -588,6 +623,21 @@ def main():
 
     sys.exit(1 if agg.failed > 0 else 0)
 
+
+def write_static_ohe_projection():
+    src = os.path.join(STATIC_DIR, "static_ticker_info.parquet")
+    dst = os.path.join(STATIC_DIR, "static_ohe.parquet")
+    if not os.path.exists(src):
+        return
+    df = pl.read_parquet(src)
+    ohe_cols = [c for c in df.columns if c.startswith("sector_") or c.startswith("country_")]
+    if not ohe_cols:
+        return
+    out = df.select(["ticker"] + ohe_cols).with_columns(
+        [pl.col(c).cast(pl.Float32).fill_null(0.0) for c in ohe_cols]
+    )
+    out.write_parquet(dst, compression="zstd")
+    print(f"💾 Wrote OHE projection → {dst}")
 
 if __name__ == "__main__":
     main()

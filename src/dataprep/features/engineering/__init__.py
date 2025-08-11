@@ -25,3 +25,8 @@ from src.dataprep.features.engineering.fundamental_features import (
 )
 from src.dataprep.features.engineering.valuation_features import \
       extract_latest_pe_pfcf
+
+from src.dataprep.features.engineering.static_features import (
+    encode_country,
+    encode_sector
+)

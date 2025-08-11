@@ -9,10 +9,9 @@ from src.dataprep.features.engineering import (
     compute_eps_cagr, compute_fcf_cagr,
     extract_latest_pe_pfcf, compute_payout_ratio,
     compute_sector_relative_return,
-    encode_sector, compute_sma_delta_50_250
+    encode_sector, encode_country, compute_sma_delta_50_250
 )
 from src.dataprep.fetcher.ticker_params.sector import extract_sector_name
-
 
 def safe_get(df: pl.DataFrame, col: str, default: float = 0.0) -> float:
     return df[-1, col] if col in df.columns and df.height > 0 else default
@@ -89,8 +88,10 @@ def build_feature_table_from_inputs(ticker: str, inputs: dict, as_of: date) -> t
     country = profile.get("country", "N/A")
     static_features = {
         "ticker": ticker,
-        "country": country,
-        **encode_sector(sector)
+        "country": country,             # raw label
+        "sector": sector or "UNKNOWN",  # raw label
+        **encode_sector(sector),
+        **encode_country(country),
     }
 
     return pl.DataFrame([dynamic_features]), pl.DataFrame([static_features])
