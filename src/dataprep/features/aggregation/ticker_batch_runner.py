@@ -115,7 +115,7 @@ START_DATE = date(2021, 12, 31)  # <-- adjust your backtesting start
 END_DATE = date.today().replace(month=12, day=31)  # e.g. last full year
 FREQ = "1Y"
 
-TICKERS_FILE = "us_tickers_subset_limited.txt"
+TICKERS_FILE = "features_data/tickers/us_tickers_subset_limited.txt"
 SLEEP_BETWEEN_CALLS = 1.0
 MAX_RETRIES = 3
 

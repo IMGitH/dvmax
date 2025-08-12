@@ -1,7 +1,7 @@
 {
-  "ok": 9,
-  "skipped": 30,
-  "flagged": 1,
+  "ok": 0,
+  "skipped": 40,
+  "flagged": 0,
   "failed": 0,
-  "changed_tickers": 2
+  "changed_tickers": 0
 }
