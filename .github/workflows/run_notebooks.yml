@@ -29,13 +29,17 @@ jobs:
 
       - name: Execute and convert all root notebooks to HTML
         run: |
+          set -euo pipefail
+          mkdir -p notebooks
           for nb in ./notebooks/*.ipynb; do
             echo "Processing $nb"
-            jupyter nbconvert --to html --execute "$nb" --output "${nb%.ipynb}.html"
+            jupyter nbconvert --to html --execute "$nb" \
+              --output-dir=./notebooks \
+              --output "$(basename "${nb%.ipynb}.html")"
           done
 
       - name: Upload HTML results
         uses: actions/upload-artifact@v4
         with:
           name: notebook-html-outputs
-          path: ./*.html
+          path: ./notebooks/*.html
