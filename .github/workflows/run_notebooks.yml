@@ -29,7 +29,7 @@ jobs:
 
       - name: Execute and convert all root notebooks to HTML
         run: |
-          for nb in ./*.ipynb; do
+          for nb in ./notebooks/*.ipynb; do
             echo "Processing $nb"
             jupyter nbconvert --to html --execute "$nb" --output "${nb%.ipynb}.html"
           done

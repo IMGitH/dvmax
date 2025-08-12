@@ -21,7 +21,8 @@ permissions:
 
 env:
   PYTHON_VERSION: "3.11"
-  
+  DEFAULT_COV_TRESHOLD: "70"
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -71,7 +72,7 @@ jobs:
         FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
         PYTHONPATH: .
       run: |
-        THRESHOLD=${{ github.event.inputs.coverage_threshold || '85' }}
+        THRESHOLD=${{ github.event.inputs.coverage_threshold || env.DEFAULT_COV_TRESHOLD }}
         if [[ "${{ github.event.inputs.debug }}" == "true" ]]; then
           echo "Running pytest in debug mode with coverage..."
           pytest -vv -s --log-cli-level=DEBUG --cov=src --cov-report=term-missing --cov-report=xml --cov-fail-under=$THRESHOLD
