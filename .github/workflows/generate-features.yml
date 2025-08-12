@@ -61,11 +61,15 @@ jobs:
 
       # 🔹 Run macro ALWAYS (it's not related to FMP)
       - name: 🧮 Run macro batch generation
+        env:
+          PYTHONPATH: .
         run: python src/dataprep/features/aggregation/macro_batch_runner.py
 
       # Now preflight only for the ticker part
       - name: 🔎 FMP preflight
         id: preflight
+        env:
+          PYTHONPATH: .
         continue-on-error: true
         run: |
           set -eo pipefail
@@ -95,6 +99,7 @@ jobs:
       - name: 🧮 Run ticker batch generation
         if: steps.preflight.outputs.kind == 'OK' || steps.preflight.outputs.kind == 'RATE' || steps.preflight.outputs.kind == 'SERVER' || steps.preflight.outputs.kind == 'OTHER'
         env:
+          PYTHONPATH: .
           FORCE_MERGE: "0"
           OVERWRITE_MODE: "append"
         run: python src/dataprep/features/aggregation/ticker_batch_runner.py
