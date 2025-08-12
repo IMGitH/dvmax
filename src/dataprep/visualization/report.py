@@ -1,0 +1,61 @@
+from datetime import date
+import polars as pl
+from src.dataprep.features.aggregation.ticker_row_builder import build_feature_table_from_inputs
+from src.dataprep.constants import GROUP_PREFIXES, SOURCE_HINTS
+
+
+def print_feature_report_from_df(df: pl.DataFrame, inputs: dict, as_of: date):
+    row = df.to_dicts()[0]  # Use first row as a dict
+    used_keys = set()
+
+    profile_df = inputs.get("profile")
+    if isinstance(profile_df, pl.DataFrame):
+        sector_str = profile_df["sector"] if "sector" in profile_df.columns else "N/A"
+    elif isinstance(profile_df, dict):
+        sector_str = profile_df.get("sector", "N/A")
+    else:
+        sector_str = "N/A"
+
+    def print_group(title: str, keys: list[str], source_df: pl.DataFrame | None = None):
+        print(f"\n→ {title}")
+        for key in keys:
+            val = row.get(key, 'N/A')
+            print(f"{key:25}: {val}")
+        if source_df is not None:
+            print("\nDataFrame used:")
+            print(source_df)
+
+    print(f"\n=== Feature Report for {row.get('ticker', 'N/A')} ===")
+    print(f"- As of: {as_of.isoformat()}")
+    print(f"- Shape: {df.shape}")
+
+    for group_name, prefixes in GROUP_PREFIXES.items():
+        keys = sorted([
+            k for k in row if any(k.startswith(p) for p in prefixes)
+        ])
+        used_keys.update(keys)
+
+        source_key = SOURCE_HINTS.get(group_name)
+        source_df = None
+        if source_key == "profile":
+            source_df = pl.DataFrame([{"sector": sector_str}])
+        elif source_key and source_key in inputs:
+            source_df = inputs[source_key]
+
+        print_group(group_name, keys, source_df)
+
+    other_keys = sorted(set(row.keys()) - used_keys - {"ticker"})
+    if other_keys:
+        print_group("Other Features", other_keys)
+
+
+if __name__ == "__main__":
+    from src.dataprep.fetcher.ticker_data_sources import fetch_all_per_ticker
+
+    ticker = "AAPL"
+    inputs = fetch_all_per_ticker(ticker, div_lookback_years=5, other_lookback_years=5)
+
+    # ✅ Correct unpacking here
+    df_dynamic, _ = build_feature_table_from_inputs(ticker, inputs, as_of=date.today())
+
+    print_feature_report_from_df(df_dynamic, inputs, date.today())

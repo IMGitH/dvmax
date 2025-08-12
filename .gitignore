@@ -1,7 +1,10 @@
-venv/
+.venv/
 .env
 data/*/*.parquet
 data/*/*.png
 *.pyc
 __pycache__/
 output/
+.coverage
+src/*-info/
+*.tar.gz

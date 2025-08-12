@@ -1,0 +1,21 @@
+{
+  "started_at": "2025-08-11T11:41:26+00:00",
+  "updated_at": "2025-08-12T06:14:57+00:00",
+  "totals": {
+    "total_tasks": 40,
+    "tickers": 8,
+    "dates": 5
+  },
+  "counts": {
+    "processed": 40,
+    "failed": 0,
+    "flagged": 0
+  },
+  "percent": 100.0,
+  "eta_utc": "2025-08-12T06:14:57+00:00",
+  "running": {
+    "ticker": "V",
+    "as_of": "2025-12-31"
+  },
+  "note": ""
+}

@@ -1,0 +1,4 @@
+[run]
+omit =
+    src/dataprep/visualization/report.py
+    src/dataprep/universe/populate_tickers.py

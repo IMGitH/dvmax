@@ -1,0 +1,248 @@
+name: Generate Macro & Ticker Features
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: features-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      PYTHON_VERSION: "3.11"
+      OVERWRITE_MODE: "append"
+      STRICT: "1"
+      FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+
+      - name: 🧪 Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: 🗄️ Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pipPYTHON_VERSION
+          key: pip-${{ runner.os }}-${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-${{ env.PYTHON_VERSION }}-
+            pip-
+
+      - name: 📦 Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # Restore snapshot BEFORE running either macro or tickers (resume-friendly)
+      - name: ♻️ Restore latest snapshot (if exists)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          tag=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' || true)
+          if [ -n "$tag" ]; then
+            echo "Found latest release: $tag"
+            gh release download "$tag" -p 'features_*.tar.gz' || exit 0
+            tar -xzf features_*.tar.gz || true
+            ls -R features_data || true
+          else
+            echo "No previous snapshot; starting fresh."
+          fi
+
+      # 🔹 Run macro ALWAYS (it's not related to FMP)
+      - name: 🧮 Run macro batch generation
+        run: python src/dataprep/features/aggregation/macro_batch_runner.py
+
+      # Now preflight only for the ticker part
+      - name: 🔎 FMP preflight
+        id: preflight
+        continue-on-error: true
+        run: |
+          set -eo pipefail
+          code=0
+          kind="OK"
+          if python tools/fmp_preflight.py | tee preflight.log; then
+            code=0; kind="OK"
+          else
+            code=${PIPESTATUS[0]:-1}
+            if [ -f preflight.log ]; then
+              kind=$(cut -d: -f1 preflight.log | head -n1 || echo "OTHER")
+            else
+              kind="OTHER"
+            fi
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "kind=$kind" >> "$GITHUB_OUTPUT"
+          exit $code
+
+      - name: ❌ Stop on hard FMP failures
+        if: steps.preflight.outputs.code != '0' && (steps.preflight.outputs.kind == 'PLAN' || steps.preflight.outputs.kind == 'AUTH')
+        run: |
+          echo "Hard failure: ${{ steps.preflight.outputs.kind }} — not retryable."
+          exit 1
+
+      # 🔹 Ticker generation only when preflight is OK / retryable
+      - name: 🧮 Run ticker batch generation
+        if: steps.preflight.outputs.kind == 'OK' || steps.preflight.outputs.kind == 'RATE' || steps.preflight.outputs.kind == 'SERVER' || steps.preflight.outputs.kind == 'OTHER'
+        env:
+          FORCE_MERGE: "0"
+          OVERWRITE_MODE: "append"
+        run: python src/dataprep/features/aggregation/ticker_batch_runner.py
+
+      - name: 🗂️ Build processed tickers ledger
+        if: always()
+        run: |
+          python - <<'PY'
+          import json, glob
+          from pathlib import Path
+          done = { Path(p).stem: "ok" for p in glob.glob("features_data/tickers_history/*.parquet") }
+          Path("features_data/status").mkdir(parents=True, exist_ok=True)
+          Path("features_data/status/processed.json").write_text(json.dumps(done, indent=2))
+          print("Wrote features_data/status/processed.json with", len(done), "tickers")
+          PY
+
+      - name: 🧪 Show validation flags
+        if: always()
+        run: |
+          echo "🔍 Checking for soft validation flags..."
+          if compgen -G "features_data/_audit/*.txt" > /dev/null; then
+            echo "⚠️ Flagged rows:"
+            for f in features_data/_audit/*.txt; do
+              echo ""
+              echo "----- $(basename "$f") -----"
+              cat "$f"
+            done
+          else
+            echo "✅ No flags."
+          fi
+
+      - name: 🛠️ Install jq for JSON processing
+        if: always()
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: 📋 Append live progress to summary
+        if: always()
+        run: |
+          if [ -f features_data/status/progress.json ]; then
+            echo "## Data Progress" >> $GITHUB_STEP_SUMMARY
+            echo "- Percent: $(jq -r .percent features_data/status/progress.json)%" >> $GITHUB_STEP_SUMMARY
+            echo "- Processed: $(jq -r .counts.processed features_data/status/progress.json)/$(jq -r .totals.total_tasks features_data/status/progress.json)" >> $GITHUB_STEP_SUMMARY
+            echo "- Flagged: $(jq -r .counts.flagged features_data/status/progress.json)" >> $GITHUB_STEP_SUMMARY
+            echo "- Failed: $(jq -r .counts.failed features_data/status/progress.json)" >> $GITHUB_STEP_SUMMARY
+            echo "- ETA (UTC): $(jq -r .eta_utc features_data/status/progress.json)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "No progress.json found" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: 📨 Notify via GitHub Issue
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = 'features_data/status/progress.json';
+            if (!fs.existsSync(path)) {
+              core.info('progress.json not found; skipping issue notification.');
+              return;
+            }
+            const p = JSON.parse(fs.readFileSync(path,'utf8'));
+            const title = `Data snapshot ready: ${p.percent}% processed`;
+            const body = `**Data snapshot completed**
+            - Percent: ${p.percent}%
+            - Processed: ${p.counts.processed}/${p.totals.total_tasks}
+            - Flagged: ${p.counts.flagged}
+            - Failed: ${p.counts.failed}
+            - ETA (UTC): ${p.eta_utc}
+
+            cc @your-github-handle`;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body
+            });
+
+      - name: 🎯 Threshold milestones
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            if (!fs.existsSync('features_data/status/progress.json')) return;
+            const p = JSON.parse(fs.readFileSync('features_data/status/progress.json','utf8'));
+            const percent = Math.floor(p.percent || 0);
+            const hit = [50, 90].includes(percent);
+            if (!hit) return;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Milestone ${percent}% reached`,
+              body: `Processed ${p.counts.processed}/${p.totals.total_tasks} | Failed ${p.counts.failed} | ETA ${p.eta_utc || 'n/a'}`
+            });
+
+      - name: 📎 Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs
+          path: |
+            preflight.log
+            **/*.log
+            features_data/status/*.json
+            features_data/_audit/*.txt
+          if-no-files-found: ignore
+          retention-days: 7
+
+
+      - name: 💾 Upload partial results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: features_partial
+          path: |
+            features_data/macro_history
+            features_data/tickers_history
+            features_data/tickers_static
+            features_data/status
+            features_data/_audit
+          if-no-files-found: ignore
+          retention-days: 7
+
+
+      - name: 📦 Package outputs
+        id: package
+        if: success()
+        run: |
+          ts=$(date -u +'%Y%m%d_%H%M%S')
+          echo "TS=$ts" >> $GITHUB_OUTPUT
+          tar -czf "features_${ts}.tar.gz" \
+            features_data/macro_history \
+            features_data/tickers_history \
+            features_data/tickers_static \
+            features_data/status \
+            features_data/_audit 2>/dev/null || true
+          ls -lh "features_${ts}.tar.gz"
+
+
+      - name: 🏷️ Create release & upload asset
+        if: success()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: data-${{ steps.package.outputs.TS }}
+          name: "Data snapshot ${{ steps.package.outputs.TS }}"
+          body: |
+            Automated data snapshot.
+            - Timestamp (UTC): ${{ steps.package.outputs.TS }}
+            - OVERWRITE_MODE: ${{ env.OVERWRITE_MODE }}
+          files: |
+            features_${{ steps.package.outputs.TS }}.tar.gz
