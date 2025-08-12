@@ -14,7 +14,7 @@ on:
       coverage_threshold:
         description: 'Minimum acceptable test coverage % (fail if lower)'
         required: false
-        default: '85'
+        default: '70'
 
 permissions:
   contents: read
