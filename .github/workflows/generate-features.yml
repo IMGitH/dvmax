@@ -56,58 +56,45 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # ♻️ Restore latest snapshot (Release) OR fallback to last successful run artifact
-      - name: ♻️ Restore snapshot (Release or last successful run)
+      # ♻️ Restore snapshot strictly from the latest Release
+      - name: ♻️ Restore snapshot (Release only)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          restore_from_release() {
-            echo "Trying GitHub Release…"
-            local tag
-            tag=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' || true)
-            if [ -n "${tag:-}" ]; then
-              echo "Found release: $tag"
-              if gh release download "$tag" -p 'features_*.tar.gz'; then
-                echo "Extracting to ${DATA_ROOT}…"
-                mkdir -p "${DATA_ROOT}"
-                tar -xzf features_*.tar.gz -C "${DATA_ROOT}" --strip-components=1 || true
-                return 0
-              fi
-            fi
-            return 1
-          }
-          restore_from_artifact() {
-            echo "Falling back to last successful run artifact…"
-            # Find last successful run for this workflow on the same ref
-            wf="${{ github.workflow }}"
-            branch="${{ github.ref_name }}"
-            run_id=$(gh run list --workflow "$wf" --branch "$branch" --json databaseId,status,conclusion,headBranch \
-              --jq '[.[] | select(.status=="completed" and .conclusion=="success")][0].databaseId' || true)
-            if [ -n "${run_id:-}" ] && [ "${run_id}" != "null" ]; then
-              echo "Downloading artifact from run ${run_id}…"
-              gh run download "${run_id}" -n features_latest || return 1
-              # Expecting a tar.gz named features_*.tar.gz inside the artifact
-              tgz=$(ls -1 features_*.tar.gz 2>/dev/null | head -n1 || true)
-              if [ -n "${tgz:-}" ]; then
-                mkdir -p "${DATA_ROOT}"
-                tar -xzf "$tgz" -C "${DATA_ROOT}" --strip-components=1 || true
-                return 0
-              fi
-            fi
-            return 1
-          }
+          DATA_ROOT="${DATA_ROOT:-${RUNNER_TEMP}/features_data}"
+          mkdir -p "$DATA_ROOT"
+          dl="${RUNNER_TEMP}/release_dl"
+          mkdir -p "$dl"
 
-          if restore_from_release; then
-            echo "Restored from Release."
-          elif restore_from_artifact; then
-            echo "Restored from artifact."
-          else
-            echo "No previous snapshot; starting fresh."
+          # Find most recent published, non-prerelease release with a "data-" tag
+          tag=$(gh release list --limit 30 --json tagName,isDraft,isPrerelease,publishedAt \
+            --jq '[.[] | select(.isDraft==false and .isPrerelease==false and (.tagName|startswith("data-")))] 
+                  | sort_by(.publishedAt) 
+                  | last.tagName' || true)
+
+          if [ -z "${tag:-}" ] || [ "${tag}" = "null" ]; then
+            echo "No suitable Release found; starting fresh."
+            exit 0
           fi
 
+          echo "Using Release: $tag"
+          gh release download "$tag" -p 'features_*.tar.gz' -D "$dl"
+
+          tgz=$(ls -1 "$dl"/features_*.tar.gz 2>/dev/null | head -n1 || true)
+          if [ -z "${tgz:-}" ]; then
+            echo "No features_*.tar.gz asset in $tag; starting fresh."
+            exit 0
+          fi
+
+          echo "Downloaded: $tgz"
+          echo "sha256: $(sha256sum "$tgz" | cut -d' ' -f1)"
+
+          # Extract directly into DATA_ROOT (tarball contains top-level dirs)
+          tar -xzf "$tgz" -C "$DATA_ROOT"
+
           echo "Restored tree:"
-          ls -R "${DATA_ROOT}" || true
+          ls -R "$DATA_ROOT" || true
 
       # 🔹 Run macro ALWAYS (it's not related to FMP)
       - name: 🧮 Run macro batch generation
