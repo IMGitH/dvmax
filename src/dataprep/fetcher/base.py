@@ -59,6 +59,11 @@ class FMPClient:
             endpoint = endpoint[1:]
         url = f"{self.base_url}/{endpoint}"
 
+        if endpoint != "quota" and not os.getenv("FMP_SKIP_QUOTA_CHECK"):
+            remaining = self.get_remaining_calls()
+            if isinstance(remaining, int) and remaining <= 0:
+                raise FMPRateLimitError("No remaining daily calls in quota")
+
         params = dict(params or {})
         params["apikey"] = self.api_key
 
