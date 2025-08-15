@@ -25,17 +25,6 @@ class FMPClient:
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": "dvmax/feature-fetcher"})
 
-    def get_quota(self) -> dict:
-        """Return API quota info: limit, usage, remaining."""
-        data = self.fetch("quota")
-        # Expected format: {'plan': {...}, 'usage': {...}, 'remaining': {...}}
-        return data
-
-    def get_remaining_calls(self) -> int:
-        """Convenience: just the remaining calls for today."""
-        quota = self.get_quota()
-        return quota.get("remaining", {}).get("day", -1)
-    
     def _sleep_backoff(self, attempt: int, retry_after: Optional[str]) -> None:
         if retry_after:
             try:
@@ -50,19 +39,10 @@ class FMPClient:
         jitter = 0.25 + (time.time() % 0.5)  # small pseudo-jitter
         time.sleep(min(30, base + jitter))
 
-    def fetch(self, endpoint: str, params: Optional[Dict[str, Any]] = None, max_retries: int = 2) -> Any:
-        remaining_calls = self.get_remaining_calls()
-        print(f"Remaining API calls: {remaining_calls}")
-        if remaining_calls <= 0:
-            raise FMPRateLimitError("No remaining daily calls in quota")
+    def fetch(self, endpoint: str, params: Optional[Dict[str, Any]] = None, max_retries: int = 3) -> Any:
         if endpoint.startswith("/"):
             endpoint = endpoint[1:]
         url = f"{self.base_url}/{endpoint}"
-
-        if endpoint != "quota" and not os.getenv("FMP_SKIP_QUOTA_CHECK"):
-            remaining = self.get_remaining_calls()
-            if isinstance(remaining, int) and remaining <= 0:
-                raise FMPRateLimitError("No remaining daily calls in quota")
 
         params = dict(params or {})
         params["apikey"] = self.api_key
