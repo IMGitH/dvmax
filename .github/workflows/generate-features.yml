@@ -12,6 +12,9 @@ concurrency:
 
 jobs:
   generate:
+    permissions:
+      contents: read
+      issues: write
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
@@ -198,10 +201,10 @@ jobs:
             echo "No progress.json found" >> $GITHUB_STEP_SUMMARY
           fi
 
-      - name: 📨 Notify via GitHub Issue
-        if: success()
+      - name: 📨 Notify Progress via GitHub Issue
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
             const path = 'features_data/status/progress.json';
@@ -222,8 +225,7 @@ jobs:
             await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title,
-              body
+              title, body
             });
 
       - name: 🎯 Threshold milestones
