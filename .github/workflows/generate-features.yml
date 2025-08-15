@@ -14,16 +14,25 @@ jobs:
   generate:
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    environment: dvmax-env
     env:
       PYTHON_VERSION: "3.11"
       OVERWRITE_MODE: "append"
       STRICT: "1"
-      FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
-
+      
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
+
+      - name: 📁 Prepare isolated data root
+        env:
+          DATA_ROOT: ${{ runner.temp }}/features_data
+        run: |
+          set -e
+          mkdir -p "${DATA_ROOT}"
+          # Keep existing paths working by symlinking:
+          rm -rf features_data 2>/dev/null || true
+          ln -s "${DATA_ROOT}" features_data
+          echo "DATA_ROOT=${DATA_ROOT}" >> $GITHUB_ENV
 
       - name: 🧪 Set up Python ${{ env.PYTHON_VERSION }}
         uses: actions/setup-python@v5
@@ -33,7 +42,7 @@ jobs:
       - name: 🗄️ Cache pip dependencies
         uses: actions/cache@v4
         with:
-          path: ~/.cache/pipPYTHON_VERSION
+          path: ~/.cache/pip
           key: pip-${{ runner.os }}-${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt') }}
           restore-keys: |
             pip-${{ runner.os }}-${{ env.PYTHON_VERSION }}-
@@ -44,21 +53,58 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # Restore snapshot BEFORE running either macro or tickers (resume-friendly)
-      - name: ♻️ Restore latest snapshot (if exists)
+      # ♻️ Restore latest snapshot (Release) OR fallback to last successful run artifact
+      - name: ♻️ Restore snapshot (Release or last successful run)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -e
-          tag=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' || true)
-          if [ -n "$tag" ]; then
-            echo "Found latest release: $tag"
-            gh release download "$tag" -p 'features_*.tar.gz' || exit 0
-            tar -xzf features_*.tar.gz || true
-            ls -R features_data || true
+          set -euo pipefail
+          restore_from_release() {
+            echo "Trying GitHub Release…"
+            local tag
+            tag=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' || true)
+            if [ -n "${tag:-}" ]; then
+              echo "Found release: $tag"
+              if gh release download "$tag" -p 'features_*.tar.gz'; then
+                echo "Extracting to ${DATA_ROOT}…"
+                mkdir -p "${DATA_ROOT}"
+                tar -xzf features_*.tar.gz -C "${DATA_ROOT}" --strip-components=1 || true
+                return 0
+              fi
+            fi
+            return 1
+          }
+          restore_from_artifact() {
+            echo "Falling back to last successful run artifact…"
+            # Find last successful run for this workflow on the same ref
+            wf="${{ github.workflow }}"
+            branch="${{ github.ref_name }}"
+            run_id=$(gh run list --workflow "$wf" --branch "$branch" --json databaseId,status,conclusion,headBranch \
+              --jq '[.[] | select(.status=="completed" and .conclusion=="success")][0].databaseId' || true)
+            if [ -n "${run_id:-}" ] && [ "${run_id}" != "null" ]; then
+              echo "Downloading artifact from run ${run_id}…"
+              gh run download "${run_id}" -n features_latest || return 1
+              # Expecting a tar.gz named features_*.tar.gz inside the artifact
+              tgz=$(ls -1 features_*.tar.gz 2>/dev/null | head -n1 || true)
+              if [ -n "${tgz:-}" ]; then
+                mkdir -p "${DATA_ROOT}"
+                tar -xzf "$tgz" -C "${DATA_ROOT}" --strip-components=1 || true
+                return 0
+              fi
+            fi
+            return 1
+          }
+
+          if restore_from_release; then
+            echo "Restored from Release."
+          elif restore_from_artifact; then
+            echo "Restored from artifact."
           else
             echo "No previous snapshot; starting fresh."
           fi
+
+          echo "Restored tree:"
+          ls -R "${DATA_ROOT}" || true
 
       # 🔹 Run macro ALWAYS (it's not related to FMP)
       - name: 🧮 Run macro batch generation
@@ -71,6 +117,7 @@ jobs:
         id: preflight
         env:
           PYTHONPATH: .
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
         continue-on-error: true
         run: |
           set -eo pipefail
@@ -101,6 +148,7 @@ jobs:
         if: steps.preflight.outputs.kind == 'OK' || steps.preflight.outputs.kind == 'RATE' || steps.preflight.outputs.kind == 'SERVER' || steps.preflight.outputs.kind == 'OTHER'
         env:
           PYTHONPATH: .
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
           FORCE_MERGE: "0"
           OVERWRITE_MODE: "append"
         run: python src/dataprep/features/aggregation/ticker_batch_runner.py
@@ -224,21 +272,25 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-
+      # 📦 Package outputs from DATA_ROOT, not repo
       - name: 📦 Package outputs
         id: package
         if: success()
         run: |
+          set -e
           ts=$(date -u +'%Y%m%d_%H%M%S')
           echo "TS=$ts" >> $GITHUB_OUTPUT
-          tar -czf "features_${ts}.tar.gz" \
-            features_data/macro_history \
-            features_data/tickers_history \
-            features_data/tickers_static \
-            features_data/status \
-            features_data/_audit 2>/dev/null || true
+          # Build a clean payload under $RUNNER_TEMP and tar it
+          pkg_dir="${RUNNER_TEMP}/pkg_${ts}"
+          mkdir -p "$pkg_dir"
+          for d in macro_history tickers_history tickers_static status _audit; do
+            if [ -d "${DATA_ROOT}/${d}" ]; then
+              mkdir -p "${pkg_dir}/${d}"
+              cp -R "${DATA_ROOT}/${d}/." "${pkg_dir}/${d}/"
+            fi
+          done
+          tar -czf "features_${ts}.tar.gz" -C "${pkg_dir}" .
           ls -lh "features_${ts}.tar.gz"
-
 
       - name: 🏷️ Create release & upload asset
         if: success()
@@ -252,3 +304,13 @@ jobs:
             - OVERWRITE_MODE: ${{ env.OVERWRITE_MODE }}
           files: |
             features_${{ steps.package.outputs.TS }}.tar.gz
+
+      # ➕ Optional: also publish a cross-run artifact named 'features_latest'
+      - name: 📤 Publish cross-run artifact alias
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: features_latest
+          path: features_${{ steps.package.outputs.TS }}.tar.gz
+          retention-days: 30
+          
