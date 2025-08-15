@@ -2,6 +2,11 @@ name: Generate Macro & Ticker Features
 
 on:
   workflow_dispatch:
+    inputs:
+      restore_tag:
+        description: "Release tag to restore (e.g., data-20250101_120000)"
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -67,11 +72,16 @@ jobs:
           dl="${RUNNER_TEMP}/release_dl"
           mkdir -p "$dl"
 
-          # Find most recent published, non-prerelease release with a "data-" tag
-          tag=$(gh release list --limit 30 --json tagName,isDraft,isPrerelease,publishedAt \
-            --jq '[.[] | select(.isDraft==false and .isPrerelease==false and (.tagName|startswith("data-")))] 
-                  | sort_by(.publishedAt) 
-                  | last.tagName' || true)
+          manual="${{ inputs.restore_tag || '' }}"
+          if [ -n "$manual" ]; then
+            tag="$manual"
+          else
+            # Find most recent published, non-prerelease release with a "data-" tag
+            tag=$(gh release list --limit 30 --json tagName,isDraft,isPrerelease,publishedAt \
+              --jq '[.[] | select(.isDraft==false and .isPrerelease==false and (.tagName|startswith("data-")))] 
+                    | sort_by(.publishedAt) 
+                    | last.tagName' || true)
+          fi
 
           if [ -z "${tag:-}" ] || [ "${tag}" = "null" ]; then
             echo "No suitable Release found; starting fresh."
@@ -281,25 +291,17 @@ jobs:
           tar -czf "features_${ts}.tar.gz" -C "${pkg_dir}" .
           ls -lh "features_${ts}.tar.gz"
 
+      # Only publish releases from this repo & trusted branches (adjust ORG/REPO and branch)
       - name: 🏷️ Create release & upload asset
-        if: success()
+        if: success() && github.repository == 'ORG/REPO' && startsWith(github.ref, 'refs/heads/main')
         uses: softprops/action-gh-release@v2
         with:
+          token: ${{ secrets.RELEASE_TOKEN }}   # ✅ PAT with repo:write
           tag_name: data-${{ steps.package.outputs.TS }}
           name: "Data snapshot ${{ steps.package.outputs.TS }}"
           body: |
             Automated data snapshot.
             - Timestamp (UTC): ${{ steps.package.outputs.TS }}
             - OVERWRITE_MODE: ${{ env.OVERWRITE_MODE }}
-          files: |
-            features_${{ steps.package.outputs.TS }}.tar.gz
-
-      # ➕ Optional: also publish a cross-run artifact named 'features_latest'
-      - name: 📤 Publish cross-run artifact alias
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: features_latest
-          path: features_${{ steps.package.outputs.TS }}.tar.gz
-          retention-days: 30
-          
+          target_commitish: ${{ github.sha }}
+          files: features_${{ steps.package.outputs.TS }}.tar.gz
