@@ -3,7 +3,7 @@ import yfinance as yf
 import re
 from tqdm import tqdm
 
-TICKERS_FILE = "features_data/tickers/us_tickers.txt"
+TICKERS_FILE = "config/us_tickers.txt"
 
 
 def is_valid_ticker(ticker: str) -> bool:
