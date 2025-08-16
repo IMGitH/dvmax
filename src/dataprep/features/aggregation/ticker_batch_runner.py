@@ -18,6 +18,73 @@ from src.dataprep.features.aggregation.validate_dynamic_row import validate_dyna
 from src.dataprep.constants import EXPECTED_COLUMNS
 
 
+# === Configuration (WF-controlled) ===========================================
+# You can override all of these via environment variables from the workflow.
+#
+# Tickers source (choose one):
+#   - TICKERS="AAPL, MSFT TSLA"        # inline list (comma/space/newline allowed)
+#   - TICKERS_FILE="config/tickers.list" (default below)
+#
+# Dates (year endpoints; we generate 2021-12-31, 2022-12-31, ...):
+#   - START_YEAR=2021
+#   - END_YEAR=0            # 0 => current year
+#   - FREQ="1Y"             # reserved for future alternate freqs
+#
+# Behavior:
+#   - OVERWRITE_MODE=append|overwrite|skip
+#   - FORCE_MERGE=0|1
+#   - STRICT=0|1
+#   - SLEEP_BETWEEN_CALLS=1.0
+#   - MAX_RETRIES=3
+#
+def _get_bool(name: str, default: bool) -> bool:
+    v = os.environ.get(name, str(int(default)))
+    return v not in ("0", "", "false", "False", "no", "No")
+
+def _get_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, str(default)))
+    except Exception:
+        return default
+
+def _get_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except Exception:
+        return default
+
+def _load_tickers_from_env_or_file(default_file: str) -> list[str]:
+    inline = os.environ.get("TICKERS", "").strip()
+    if inline:
+        import re
+        # split by commas, whitespace, or newlines; normalize & de-dup
+        parts = [p.strip().upper() for p in re.split(r"[,\s]+", inline) if p.strip()]
+        return sorted(dict.fromkeys(parts))
+    path = os.environ.get("TICKERS_FILE", default_file)
+    return load_tickers(path)
+
+START_YEAR = _get_int("START_YEAR", 2021)
+_end_year_env = _get_int("END_YEAR", 0)
+END_YEAR = _end_year_env if _end_year_env > 0 else date.today().year
+FREQ = os.environ.get("FREQ", "1Y")
+
+TICKERS_FILE = os.environ.get("TICKERS_FILE", "config/us_tickers_subset_limited.txt")
+SLEEP_BETWEEN_CALLS = _get_float("SLEEP_BETWEEN_CALLS", 1.0)
+MAX_RETRIES = _get_int("MAX_RETRIES", 3)
+
+OVERWRITE_MODE = os.environ.get("OVERWRITE_MODE", "append").lower()
+VALID_OVERWRITE_MODES = {"append", "overwrite", "skip"}
+if OVERWRITE_MODE not in VALID_OVERWRITE_MODES:
+    raise ValueError(f"Invalid OVERWRITE_MODE: '{OVERWRITE_MODE}'. Must be one of {VALID_OVERWRITE_MODES}")
+
+FORCE_MERGE = _get_bool("FORCE_MERGE", False)
+STRICT = _get_bool("STRICT", False)
+
+START_DATE = date(START_YEAR, 12, 31)
+END_DATE = date(END_YEAR, 12, 31)
+# ============================================================================
+
+
 ACCEPT_STATUSES = {"ok", "flagged"}  # keep flagged rows, audit them
 
 
@@ -110,29 +177,6 @@ def _maybe_preflight_fmp():
         raise SystemExit(f"❌ FMP check failed: {e}")
 
 
-# === Configuration (simplified) ===
-START_DATE = date(2021, 12, 31)  # <-- adjust your backtesting start
-END_DATE = date.today().replace(month=12, day=31)  # e.g. last full year
-FREQ = "1Y"
-
-TICKERS_FILE = "config/us_tickers_subset_limited.txt"
-SLEEP_BETWEEN_CALLS = 1.0
-MAX_RETRIES = 3
-
-# Modes:
-# - "append":    skip existing rows for each ticker/date; append only new ones
-# - "overwrite": ignore existing per-ticker file; rebuild entirely
-# - "skip":      if a per-ticker file exists, skip that ticker entirely
-OVERWRITE_MODE = os.environ.get("OVERWRITE_MODE", "append").lower()
-VALID_OVERWRITE_MODES = {"append", "overwrite", "skip"}
-if OVERWRITE_MODE not in VALID_OVERWRITE_MODES:
-    raise ValueError(f"Invalid OVERWRITE_MODE: '{OVERWRITE_MODE}'. Must be one of {VALID_OVERWRITE_MODES}")
-
-# Force merge regardless of mtimes; e.g. FORCE_MERGE=1 python script.py
-FORCE_MERGE = os.environ.get("FORCE_MERGE", "0") not in ("0", "", "false", "False")
-# STRICT now only considers 'failed'; 'flagged' never fails the run
-STRICT = os.environ.get("STRICT", "0") not in ("0", "", "false", "False")
-
 OUTPUT_DIR = os.path.join("features_data", "tickers_history")
 AUDIT_DIR  = os.path.join("features_data", "_audit")
 STATIC_DIR = os.path.join("features_data", "tickers_static")
@@ -215,7 +259,7 @@ def save_static_row(static_df: pl.DataFrame):
     # Resolve a common dtype per column:
     # - prefer non-Null
     # - if either is Utf8 -> Utf8
-    # - if both numeric -> Int32 (compact)  [use Float32 if you prefer]
+    # - if both numeric -> Int32 (compact)
     # - else fall back to the non-Null one
     def _common_dtype(de: pl.DataType, dn: pl.DataType) -> pl.DataType:
         if de == pl.Null and dn != pl.Null:
@@ -250,6 +294,14 @@ def save_static_row(static_df: pl.DataFrame):
     combined = pl.concat([existing, static_df], how="vertical").unique(subset=["ticker"])
     combined.write_parquet(static_path, compression="zstd")
     print(f"💾 Static info saved (total: {combined.height} rows) → {static_path}")
+
+
+# ----- Atomic write helper ----------------------------------------------------
+def _atomic_write_parquet(df: pl.DataFrame, path: str) -> None:
+    """Write parquet atomically: write to temp, then replace."""
+    tmp = f"{path}.tmp"
+    df.write_parquet(tmp, compression="zstd")
+    os.replace(tmp, path)
 
 
 def save_or_append(df: pl.DataFrame, ticker: str, merge_with_existing: bool = True) -> bool:
@@ -310,8 +362,6 @@ def save_or_append(df: pl.DataFrame, ticker: str, merge_with_existing: bool = Tr
         combined = pl.concat([df_existing, df], how="vertical").unique(subset=["as_of"])
 
         # FINAL GUARANTEES for validation cols:
-        #  - Utf8 dtype
-        #  - Preserve any non-empty values; default to "" only if truly null
         if "validation_status" in combined.columns:
             combined = combined.with_columns(
                 pl.coalesce([pl.col("validation_status").cast(pl.Utf8), pl.lit("")]).alias("validation_status")
@@ -331,20 +381,19 @@ def save_or_append(df: pl.DataFrame, ticker: str, merge_with_existing: bool = Tr
     else:
         df = cast_and_round_numeric(df)
 
-
     df = df.sort("as_of")
     new_height = df.height
 
     # If we merged with existing and height changed -> changed
     if (prev_height is not None and new_height != prev_height):
-        df.write_parquet(path, compression="zstd")
+        _atomic_write_parquet(df, path)
         print(f"💾 Saved: {ticker} ({df.height} rows, compressed) → {path}")
         return True
 
     # If we did NOT merge (overwrite mode) and the file already exists,
     # treat overwrite as "changed" (content is different, even if bytes match)
     if not merge_with_existing and os.path.exists(path):
-        df.write_parquet(path, compression="zstd")
+        _atomic_write_parquet(df, path)
         print(f"💾 Saved (overwrite): {ticker} ({df.height} rows, compressed) → {path}")
         return True
 
@@ -412,6 +461,49 @@ def _align_schemas(df1: pl.DataFrame, df2: pl.DataFrame) -> tuple[pl.DataFrame, 
     return df1.select(all_cols), df2.select(all_cols)
 
 
+# ----- Row guards -------------------------------------------------------------
+def _row_is_all_null_features(df: pl.DataFrame) -> bool:
+    """True if all non-meta columns are null/NaN (i.e., empty feature row)."""
+    meta = {"ticker", "as_of", "validation_status", "violations"}
+    feat_cols = [c for c in df.columns if c not in meta]
+    if not feat_cols:
+        return True
+    nn = df.select([pl.col(c).is_not_null().sum() for c in feat_cols]).row(0)
+    return sum(nn) == 0
+
+
+# ----- Retry helper -----------------------------------------------------------
+def _retry(max_tries: int, base_sleep: float = 0.5):
+    """Exponential backoff retry decorator."""
+    def deco(fn):
+        def inner(*a, **kw):
+            last = None
+            tries = max(1, int(max_tries))
+            for i in range(tries):
+                try:
+                    return fn(*a, **kw)
+                except Exception as e:
+                    last = e
+                    if i < tries - 1:
+                        time.sleep(base_sleep * (2 ** i))
+            raise last
+        return inner
+    return deco
+
+
+@_retry(MAX_RETRIES, base_sleep=0.5)
+def _fetch_build_validate_once(ticker, as_of, keep_df):
+    dyn_df, static_df, sector = fetch_and_build_features(ticker, as_of)
+    status, errors, dyn_df = validate_dynamic_row(
+        dyn_df, ticker, prev_df=keep_df if not keep_df.is_empty() else None, sector=sector
+    )
+    dyn_df = dyn_df.with_columns([
+        pl.lit(status).cast(pl.Utf8).alias("validation_status"),
+        pl.lit(";".join(errors)).cast(pl.Utf8).alias("violations"),
+    ])
+    return dyn_df, static_df, sector, status, errors
+
+
 def generate_features_for_ticker(
     ticker: str,
     dates: list[date],
@@ -443,24 +535,19 @@ def generate_features_for_ticker(
             continue
 
         try:
-            dyn_df, static_df, sector = fetch_and_build_features(ticker, as_of)
+            dyn_df, static_df, sector, status, errors = _fetch_build_validate_once(ticker, as_of, keep_df)
 
             if not saved_static:
-                # ensure ticker col exists (it does) and dtypes are strings/ints
                 save_static_row(static_df)
                 saved_static = True
 
-            status, errors, dyn_df = validate_dynamic_row(
-                dyn_df, ticker,
-                prev_df=keep_df if not keep_df.is_empty() else None,
-                sector=sector
-            )
-
-            # Ensure validation columns exist on the new row
-            dyn_df = dyn_df.with_columns([
-                pl.lit(status).cast(pl.Utf8).alias("validation_status"),
-                pl.lit(";".join(errors)).cast(pl.Utf8).alias("violations"),
-            ])
+            # 🛑 Skip rows that carry no signal at all
+            if _row_is_all_null_features(dyn_df):
+                logs.append(f"[SKIP] {ticker} {as_of} empty feature row — no data for this year")
+                stats.skipped += 1
+                if on_progress:
+                    on_progress(status="processed", flagged=False, ticker=ticker, as_of=as_of)
+                continue
 
             if status in ACCEPT_STATUSES:
                 if status == "flagged":
@@ -493,7 +580,7 @@ def generate_features_for_ticker(
 
     if changed:
         keep_df = keep_df.unique(subset=["as_of"], keep="last").sort("as_of")
-        keep_df.write_parquet(out_fp, compression="zstd")
+        _atomic_write_parquet(keep_df, str(out_fp))
         stats.changed_tickers += 1
 
     return logs, changed, stats
@@ -549,7 +636,7 @@ def merge_all_feature_vectors(force_merge: bool = False):
         dfs.append(df)
 
     merged_df = pl.concat(dfs, how="vertical").sort(["ticker", "as_of"])
-    merged_df.write_parquet(merged_file)
+    _atomic_write_parquet(merged_df, merged_file)
     print(f"✅ Merged {len(paths)} files into {merged_file}")
 
 
@@ -570,7 +657,7 @@ def main():
     _maybe_preflight_fmp()
     ensure_output_dir()
 
-    tickers = load_tickers(TICKERS_FILE)
+    tickers = _load_tickers_from_env_or_file(TICKERS_FILE)
     all_dates = get_dates_between(START_DATE, END_DATE)
 
     print(f"🟢 Generating features for {len(tickers)} tickers × {len(all_dates)} dates...")
@@ -639,5 +726,7 @@ def write_static_ohe_projection():
     out.write_parquet(dst, compression="zstd")
     print(f"💾 Wrote OHE projection → {dst}")
 
+
 if __name__ == "__main__":
     main()
+
