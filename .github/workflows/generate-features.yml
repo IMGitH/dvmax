@@ -7,6 +7,42 @@ on:
         description: "Release tag to restore (e.g., data-20250101_120000)"
         required: false
         type: string
+      tickers_file:
+        description: "Tickers file path (when mode=file)"
+        required: false
+        type: string
+        default: config/us_tickers.txt
+      start_year:
+        description: "First year to generate (we use 12/31 of this year)"
+        required: false
+        type: string
+        default: "2021"
+      end_year:
+        description: "Last year to generate (0 => current year)"
+        required: false
+        type: string
+        default: "0"
+      overwrite_mode:
+        description: "append | overwrite | skip"
+        required: false
+        type: choice
+        default: append
+        options: [append, overwrite, skip]
+      strict:
+        description: "Fail run on hard errors (flagged rows never fail)"
+        required: false
+        type: boolean
+        default: true
+      force_merge:
+        description: "Force re-merge of all parts at the end"
+        required: false
+        type: boolean
+        default: false
+      sleep_between_calls:
+        description: "Seconds to sleep between tickers"
+        required: false
+        type: string
+        default: "1.0"
 
 permissions:
   contents: write
@@ -25,12 +61,31 @@ jobs:
     timeout-minutes: 120
     env:
       PYTHON_VERSION: "3.11"
+      # Defaults; may be overridden by the "Configure env from inputs" step below
       OVERWRITE_MODE: "append"
       STRICT: "1"
-      
+      FORCE_MERGE: "0"
+      START_YEAR: "2021"
+      END_YEAR: "0"
+      SLEEP_BETWEEN_CALLS: "1.0"
+      TICKERS_FILE: "config/us_tickers_subset_limited.txt"
+
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
+
+      - name: ⚙️ Configure env from inputs
+        run: |
+          set -euo pipefail
+          # map basic knobs
+          echo "OVERWRITE_MODE=${{ inputs.overwrite_mode || 'append' }}" >> "$GITHUB_ENV"
+          echo "STRICT=$([ '${{ inputs.strict }}' = 'true' ] && echo 1 || echo 0)" >> "$GITHUB_ENV"
+          echo "FORCE_MERGE=$([ '${{ inputs.force_merge }}' = 'true' ] && echo 1 || echo 0)" >> "$GITHUB_ENV"
+          echo "START_YEAR=${{ inputs.start_year || '2021' }}" >> "$GITHUB_ENV"
+          echo "END_YEAR=${{ inputs.end_year || '0' }}" >> "$GITHUB_ENV"
+          echo "SLEEP_BETWEEN_CALLS=${{ inputs.sleep_between_calls || '1.0' }}" >> "$GITHUB_ENV"
+          echo "TICKERS=" >> "$GITHUB_ENV"
+          echo "TICKERS_FILE=${{ inputs.tickers_file || 'config/us_tickers_subset_limited.txt' }}" >> "$GITHUB_ENV"
 
       - name: 📁 Prepare isolated data root
         env:
@@ -150,8 +205,15 @@ jobs:
         env:
           PYTHONPATH: .
           FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
-          FORCE_MERGE: "0"
-          OVERWRITE_MODE: "append"
+          # pass through env configured earlier
+          FORCE_MERGE: "${{ env.FORCE_MERGE }}"
+          OVERWRITE_MODE: "${{ env.OVERWRITE_MODE }}"
+          STRICT: "${{ env.STRICT }}"
+          START_YEAR: "${{ env.START_YEAR }}"
+          END_YEAR: "${{ env.END_YEAR }}"
+          SLEEP_BETWEEN_CALLS: "${{ env.SLEEP_BETWEEN_CALLS }}"
+          TICKERS_FILE: "${{ env.TICKERS_FILE }}"
+          TICKERS: "${{ env.TICKERS }}"
         run: python src/dataprep/features/aggregation/ticker_batch_runner.py
 
       - name: 🗂️ Build processed tickers ledger
@@ -256,7 +318,6 @@ jobs:
             features_data/_audit/*.txt
           if-no-files-found: ignore
           retention-days: 7
-
 
       - name: 💾 Upload partial results on failure
         if: failure()
