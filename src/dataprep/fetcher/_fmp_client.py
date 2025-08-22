@@ -1,4 +1,3 @@
-# src/dataprep/fetcher/_fmp_client.py
 import os, time, requests
 
 class FMPAuthError(RuntimeError): pass        # 401 invalid/missing key
