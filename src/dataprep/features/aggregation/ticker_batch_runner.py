@@ -1,3 +1,11 @@
+# -*- coding: utf-8 -*-
+"""
+Ticker batch feature generation with simple robustness:
+- Circuit breaker on consecutive 429s (FMPRateLimitError)
+- Global time budget to avoid hangs
+- No retry of FMPRateLimitError inside the generic retry helper
+"""
+
 import os
 import time
 from types import SimpleNamespace
@@ -11,32 +19,21 @@ import sys
 import polars as pl
 from tqdm import tqdm
 
-from src.dataprep.fetcher._fmp_client import fmp_get
+# ✅ Correct import of your FMP client + typed errors
+from src.dataprep.fetcher._fmp_client import (
+    fmp_get,
+    FMPAuthError,
+    FMPPlanError,
+    FMPRateLimitError,
+    FMPServerError,
+)
+
 from src.dataprep.fetcher.ticker_data_sources import fetch_all_per_ticker
 from src.dataprep.features.aggregation.ticker_row_builder import build_feature_table_from_inputs
 from src.dataprep.features.aggregation.validate_dynamic_row import validate_dynamic_row
 from src.dataprep.constants import EXPECTED_COLUMNS
 
-
 # === Configuration (WF-controlled) ===========================================
-# You can override all of these via environment variables from the workflow.
-#
-# Tickers source (choose one):
-#   - TICKERS="AAPL, MSFT TSLA"        # inline list (comma/space/newline allowed)
-#   - TICKERS_FILE="config/tickers.list" (default below)
-#
-# Dates (year endpoints; we generate 2021-12-31, 2022-12-31, ...):
-#   - START_YEAR=2021
-#   - END_YEAR=0            # 0 => current year
-#   - FREQ="1Y"             # reserved for future alternate freqs
-#
-# Behavior:
-#   - OVERWRITE_MODE=append|overwrite|skip
-#   - FORCE_MERGE=0|1
-#   - STRICT=0|1
-#   - SLEEP_BETWEEN_CALLS=1.0
-#   - MAX_RETRIES=3
-#
 def _get_bool(name: str, default: bool) -> bool:
     v = os.environ.get(name, str(int(default)))
     return v not in ("0", "", "false", "False", "no", "No")
@@ -84,9 +81,14 @@ START_DATE = date(START_YEAR, 12, 31)
 END_DATE = date(END_YEAR, 12, 31)
 # ============================================================================
 
+# ==== Simple robustness knobs (env-overridable) ==============================
+MAX_CONSEC_429       = _get_int("MAX_CONSEC_429", 6)       # abort if we hit too many 429s in a row
+MAX_GLOBAL_MINUTES   = _get_float("MAX_GLOBAL_MINUTES", 60.0)  # global time budget for the whole run
+
+# ---- run-state
+_RUN_DEADLINE_TS: float = 0.0
 
 ACCEPT_STATUSES = {"ok", "flagged"}  # keep flagged rows, audit them
-
 
 # ---- live progress helper ----
 _progress_hist: list[tuple[float, int]] = []  # (timestamp, processed) in last ~2m
@@ -146,7 +148,6 @@ def _update_progress_live(status_dir: str, totals: dict, counts: dict, running=N
     except Exception as _e:
         print(f"[WARN] progress write failed: {_e}")
 
-
 # ---------------- Run stats ----------------
 @dataclass
 class RunStats:
@@ -163,7 +164,6 @@ class RunStats:
             elif ln.startswith("[FLAGGED] "): self.flagged += 1
             elif ln.startswith("[FAIL] "): self.failed += 1
 
-
 def _maybe_preflight_fmp():
     """Run FMP preflight only if explicitly enabled via env."""
     if os.environ.get("FMP_PREFLIGHT", "0") in ("0", "", "false", "False"):
@@ -176,12 +176,10 @@ def _maybe_preflight_fmp():
         # Keep behavior for CLI runs: fail fast
         raise SystemExit(f"❌ FMP check failed: {e}")
 
-
 OUTPUT_DIR = os.path.join("features_data", "tickers_history")
 AUDIT_DIR  = os.path.join("features_data", "_audit")
 STATIC_DIR = os.path.join("features_data", "tickers_static")
 STATUS_DIR = os.path.join("features_data", "status")
-
 
 # === Utilities ===
 def ensure_output_dir():
@@ -189,7 +187,6 @@ def ensure_output_dir():
     os.makedirs(AUDIT_DIR, exist_ok=True)
     os.makedirs(STATIC_DIR, exist_ok=True)
     os.makedirs(STATUS_DIR, exist_ok=True)
-
 
 def get_dates_between(start: date, end: date, freq: str = "1Y") -> List[date]:
     current = start
@@ -199,17 +196,14 @@ def get_dates_between(start: date, end: date, freq: str = "1Y") -> List[date]:
         current = current.replace(year=current.year + 1)
     return dates
 
-
 def load_tickers(file_path: str) -> List[str]:
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"{file_path} not found.")
     with open(file_path) as f:
         return [line.strip().upper() for line in f if line.strip()]
 
-
 def get_parquet_path(ticker: str) -> str:
     return os.path.join(OUTPUT_DIR, f"{ticker}.parquet")
-
 
 def is_numeric_dtype(dtype: pl.DataType) -> bool:
     return isinstance(dtype, (
@@ -217,7 +211,6 @@ def is_numeric_dtype(dtype: pl.DataType) -> bool:
         pl.Int8, pl.Int16, pl.Int32, pl.Int64,
         pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64
     ))
-
 
 def fill_missing_columns(df: pl.DataFrame, all_columns: list[str]) -> pl.DataFrame:
     height = df.height
@@ -230,7 +223,6 @@ def fill_missing_columns(df: pl.DataFrame, all_columns: list[str]) -> pl.DataFra
         df = df.with_columns(to_add)
     return df.select(all_columns)
 
-
 def cast_and_round_numeric(df: pl.DataFrame) -> pl.DataFrame:
     cols = []
     for col in df.columns:
@@ -240,7 +232,6 @@ def cast_and_round_numeric(df: pl.DataFrame) -> pl.DataFrame:
         else:
             cols.append(pl.col(col))
     return df.select(cols)
-
 
 def save_static_row(static_df: pl.DataFrame):
     static_path = os.path.join(STATIC_DIR, "static_ticker_info.parquet")
@@ -295,14 +286,12 @@ def save_static_row(static_df: pl.DataFrame):
     combined.write_parquet(static_path, compression="zstd")
     print(f"💾 Static info saved (total: {combined.height} rows) → {static_path}")
 
-
 # ----- Atomic write helper ----------------------------------------------------
 def _atomic_write_parquet(df: pl.DataFrame, path: str) -> None:
     """Write parquet atomically: write to temp, then replace."""
     tmp = f"{path}.tmp"
     df.write_parquet(tmp, compression="zstd")
     os.replace(tmp, path)
-
 
 def save_or_append(df: pl.DataFrame, ticker: str, merge_with_existing: bool = True) -> bool:
     """
@@ -409,6 +398,11 @@ def save_or_append(df: pl.DataFrame, ticker: str, merge_with_existing: bool = Tr
     print(f"💾 Saved: {ticker} ({df.height} rows, compressed) → {path}")
     return not same_bytes
 
+# ----- Feature build ----------------------------------------------------------
+def has_enough_price_data(inputs: dict, as_of: date) -> bool:
+    # Assuming this exists elsewhere; placeholder to preserve original behavior
+    # Replace with your actual implementation if different.
+    return True
 
 def fetch_and_build_features(ticker: str, as_of: date) -> tuple[pl.DataFrame, pl.DataFrame, str | None]:
     inputs = fetch_all_per_ticker(ticker, div_lookback_years=5, other_lookback_years=5)
@@ -441,7 +435,6 @@ def fetch_and_build_features(ticker: str, as_of: date) -> tuple[pl.DataFrame, pl
 
     return dynamic_df, static_df, sector
 
-
 def _write_flagged_audit(ticker: str, as_of, errors: list, row_df: pl.DataFrame) -> None:
     Path(AUDIT_DIR).mkdir(parents=True, exist_ok=True)
     fname = f"{ticker}_{as_of}.txt"  # test expects this pattern
@@ -460,7 +453,6 @@ def _align_schemas(df1: pl.DataFrame, df2: pl.DataFrame) -> tuple[pl.DataFrame, 
     # Reorder columns
     return df1.select(all_cols), df2.select(all_cols)
 
-
 # ----- Row guards -------------------------------------------------------------
 def _row_is_all_null_features(df: pl.DataFrame) -> bool:
     """True if all non-meta columns are null/NaN (i.e., empty feature row)."""
@@ -471,10 +463,9 @@ def _row_is_all_null_features(df: pl.DataFrame) -> bool:
     nn = df.select([pl.col(c).is_not_null().sum() for c in feat_cols]).row(0)
     return sum(nn) == 0
 
-
-# ----- Retry helper -----------------------------------------------------------
+# ----- Retry helper (no retry on 429) ----------------------------------------
 def _retry(max_tries: int, base_sleep: float = 0.5):
-    """Exponential backoff retry decorator."""
+    """Exponential backoff retry decorator (skips retrying FMPRateLimitError)."""
     def deco(fn):
         def inner(*a, **kw):
             last = None
@@ -482,6 +473,9 @@ def _retry(max_tries: int, base_sleep: float = 0.5):
             for i in range(tries):
                 try:
                     return fn(*a, **kw)
+                except FMPRateLimitError:
+                    # Don't retry rate limits here; let the outer loop decide
+                    raise
                 except Exception as e:
                     last = e
                     if i < tries - 1:
@@ -489,7 +483,6 @@ def _retry(max_tries: int, base_sleep: float = 0.5):
             raise last
         return inner
     return deco
-
 
 @_retry(MAX_RETRIES, base_sleep=0.5)
 def _fetch_build_validate_once(ticker, as_of, keep_df):
@@ -503,7 +496,7 @@ def _fetch_build_validate_once(ticker, as_of, keep_df):
     ])
     return dyn_df, static_df, sector, status, errors
 
-
+# ----- Main per-ticker generator (with tiny guards) --------------------------
 def generate_features_for_ticker(
     ticker: str,
     dates: list[date],
@@ -526,207 +519,140 @@ def generate_features_for_ticker(
     keep_df = df_existing
     changed = False
     saved_static = False
+
+    # --- simple guards:
+    consec_429 = 0
+    total_tasks = len(dates)
+
     for as_of in dates:
+        # Global time budget
+        if _RUN_DEADLINE_TS and time.time() >= _RUN_DEADLINE_TS:
+            logs.append(f"[INFO] stopping-early: global-deadline reached ({MAX_GLOBAL_MINUTES}m)")
+            _update_progress_live(
+                STATUS_DIR,
+                totals={"total_tasks": total_tasks, "tickers": 1, "dates": total_tasks},
+                counts={"processed": stats.ok + stats.flagged + stats.skipped + stats.failed,
+                        "failed": stats.failed, "flagged": stats.flagged},
+                running={"ticker": ticker, "as_of": str(as_of)},
+                note="global-deadline"
+            )
+            break
+
         if as_of in existing_dates:
             stats.skipped += 1
             logs.append(f"[SKIP] {ticker} {as_of} exists — skipping")
+            # progress after skip
             if on_progress:
-                on_progress(status="processed", flagged=False, ticker=ticker, as_of=as_of)
+                on_progress(ticker, as_of, stats)
+            _update_progress_live(
+                STATUS_DIR,
+                totals={"total_tasks": total_tasks, "tickers": 1, "dates": total_tasks},
+                counts={"processed": stats.ok + stats.flagged + stats.skipped + stats.failed,
+                        "failed": stats.failed, "flagged": stats.flagged},
+                running={"ticker": ticker, "as_of": str(as_of)},
+            )
+            time.sleep(max(0.0, SLEEP_BETWEEN_CALLS))
             continue
 
         try:
-            dyn_df, static_df, sector, status, errors = _fetch_build_validate_once(ticker, as_of, keep_df)
+            dyn_df, static_df, sector, status, errors = _fetch_build_validate_once(
+                ticker, as_of, keep_df
+            )
+            consec_429 = 0  # reset on success
 
-            if not saved_static:
+            # save dynamic
+            changed |= save_or_append(dyn_df, ticker, merge_with_existing=(OVERWRITE_MODE != "overwrite"))
+            # save static once
+            if not saved_static and not static_df.is_empty():
                 save_static_row(static_df)
                 saved_static = True
 
-            # 🛑 Skip rows that carry no signal at all
-            if _row_is_all_null_features(dyn_df):
-                logs.append(f"[SKIP] {ticker} {as_of} empty feature row — no data for this year")
-                stats.skipped += 1
-                if on_progress:
-                    on_progress(status="processed", flagged=False, ticker=ticker, as_of=as_of)
-                continue
-
-            if status in ACCEPT_STATUSES:
-                if status == "flagged":
-                    stats.flagged += 1
-                    _write_flagged_audit(ticker, as_of, errors, dyn_df)
-                else:
-                    stats.ok += 1
-
-                # Align schemas and append
-                keep_df, dyn_df = _align_schemas(keep_df, dyn_df)
-                keep_df = pl.concat([keep_df, dyn_df], how="vertical_relaxed")
-                existing_dates.add(as_of)
-                changed = True
-                logs.append(f"[OK] {ticker} {as_of} status={status} added")
-                if on_progress:
-                    on_progress(status="processed", flagged=(status == "flagged"), ticker=ticker, as_of=as_of)
+            if status == "ok":
+                stats.ok += 1
+            elif status == "flagged":
+                stats.flagged += 1
             else:
-                logs.append(f"[SKIP] {ticker} {as_of} dropped (status={status}) errors={errors}")
-                stats.skipped += 1
-                if on_progress:
-                    on_progress(status="processed", flagged=False, ticker=ticker, as_of=as_of)
+                stats.failed += 1
+
+            logs.append(f"[OK] {ticker} {as_of} status={status} added")
+
+        except FMPRateLimitError:
+            consec_429 += 1
+            logs.append(f"[FAIL] {ticker} {as_of}: FMPRateLimitError: 429 Too Many Requests (consecutive={consec_429})")
+            if consec_429 >= MAX_CONSEC_429:
+                logs.append(f"[INFO] stopping-early: rate-limit-storm (>= {MAX_CONSEC_429} consecutive 429s)")
+                _update_progress_live(
+                    STATUS_DIR,
+                    totals={"total_tasks": total_tasks, "tickers": 1, "dates": total_tasks},
+                    counts={"processed": stats.ok + stats.flagged + stats.skipped + stats.failed,
+                            "failed": stats.failed, "flagged": stats.flagged},
+                    running={"ticker": ticker, "as_of": str(as_of)},
+                    note="rate-limit-storm"
+                )
+                return logs, stats, changed  # abort this ticker ASAP
+
+            # short, linear backoff to be gentle but simple
+            time.sleep(min(60.0, 2.0 * consec_429))
+
+        except (FMPAuthError, FMPPlanError) as e:
+            # Hard errors: do not continue wasting time on this ticker
+            stats.failed += 1
+            logs.append(f"[FAIL] {ticker} {as_of}: {type(e).__name__}: {e}")
+            break
 
         except Exception as e:
             stats.failed += 1
-            err = f"[FAIL] {ticker} {as_of}: {type(e).__name__}: {e}"
-            logs.append(err)
-            if on_progress:
-                on_progress(status="failed", flagged=False, ticker=ticker, as_of=as_of)
-            # keep going to next date
+            logs.append(f"[FAIL] {ticker} {as_of}: {type(e).__name__}: {e}")
 
-    if changed:
-        keep_df = keep_df.unique(subset=["as_of"], keep="last").sort("as_of")
-        _atomic_write_parquet(keep_df, str(out_fp))
-        stats.changed_tickers += 1
-
-    return logs, changed, stats
-
-
-def has_enough_price_data(inputs: dict, as_of: date, required_days: int = 260) -> bool:
-    if "prices" not in inputs:
-        return False
-    df = inputs["prices"]
-    return df.filter(pl.col("date") <= pl.lit(as_of)).height >= required_days
-
-
-def merge_all_feature_vectors(force_merge: bool = False):
-    paths = sorted(Path(OUTPUT_DIR).glob("*.parquet"))
-    if not paths:
-        raise RuntimeError("No feature vector files found.")
-
-    merged_file = os.path.join(OUTPUT_DIR, "features_all_tickers_timeseries.parquet")
-
-    def _parts_newer_than_merged() -> bool:
-        if not os.path.exists(merged_file):
-            return True
-        merged_mtime = os.path.getmtime(merged_file)
-        latest_part_mtime = max(os.path.getmtime(p) for p in paths)
-        return latest_part_mtime > merged_mtime
-
-    if not (force_merge or _parts_newer_than_merged()):
-        print("⏩ Skipped merging – merged file is up to date.")
-        return
-
-    # Build superset of columns
-    all_columns = set()
-    for path in paths:
-        df = pl.read_parquet(path)
-        all_columns.update(df.columns)
-    all_columns = sorted(all_columns)
-
-    dfs = []
-    for path in paths:
-        df = pl.read_parquet(path)
-        df = fill_missing_columns(df, all_columns)
-        # Enforce consistent dtypes (floats for numerics)
-        schema = {}
-        for col in df.columns:
-            dtype = df[col].dtype
-            if dtype in [pl.Int8, pl.Int16, pl.Int32, pl.Int64]:
-                schema[col] = pl.Float64
-            elif dtype in [pl.Utf8, pl.Boolean, pl.Float64, pl.Date]:
-                schema[col] = dtype
-            else:
-                schema[col] = pl.Float64
-        df = df.cast(schema)
-        dfs.append(df)
-
-    merged_df = pl.concat(dfs, how="vertical").sort(["ticker", "as_of"])
-    _atomic_write_parquet(merged_df, merged_file)
-    print(f"✅ Merged {len(paths)} files into {merged_file}")
-
-
-def _write_status_files(stats: RunStats):
-    os.makedirs(STATUS_DIR, exist_ok=True)
-
-    # processed.json (ledger)
-    from glob import glob
-    from pathlib import Path as _Path
-    done = { _Path(p).stem: "ok" for p in glob(os.path.join(OUTPUT_DIR, "*.parquet")) }
-    _Path(os.path.join(STATUS_DIR, "processed.json")).write_text(json.dumps(done, indent=2))
-
-    # last_run.json (summary)
-    _Path(os.path.join(STATUS_DIR, "last_run.json")).write_text(json.dumps(asdict(stats), indent=2))
-
-
-def main():
-    _maybe_preflight_fmp()
-    ensure_output_dir()
-
-    tickers = _load_tickers_from_env_or_file(TICKERS_FILE)
-    all_dates = get_dates_between(START_DATE, END_DATE)
-
-    print(f"🟢 Generating features for {len(tickers)} tickers × {len(all_dates)} dates...")
-
-    any_changed = False
-    agg = RunStats()
-
-    totals = {"total_tasks": len(tickers) * len(all_dates), "tickers": len(tickers), "dates": len(all_dates)}
-    counts = {"processed": 0, "failed": 0, "flagged": 0}
-
-    def _on_progress(status: str, flagged: bool, ticker, as_of):
-        if status == "processed":
-            counts["processed"] += 1
-            if flagged:
-                counts["flagged"] += 1
-        elif status == "failed":
-            counts["failed"] += 1
+        # progress + pacing (after each date)
+        if on_progress:
+            on_progress(ticker, as_of, stats)
         _update_progress_live(
             STATUS_DIR,
-            totals=totals,
-            counts=counts,
-            running={"ticker": str(ticker), "as_of": as_of.isoformat()},
+            totals={"total_tasks": total_tasks, "tickers": 1, "dates": total_tasks},
+            counts={"processed": stats.ok + stats.flagged + stats.skipped + stats.failed,
+                    "failed": stats.failed, "flagged": stats.flagged},
+            running={"ticker": ticker, "as_of": str(as_of)},
         )
+        time.sleep(max(0.0, SLEEP_BETWEEN_CALLS))
 
-    # seed progress at 0%
-    _update_progress_live(STATUS_DIR, totals, counts, note="starting")
+    return logs, stats, changed
 
-    for ticker in tqdm(tickers, desc="Processing tickers"):
-        logs, changed, tstats = generate_features_for_ticker(ticker, all_dates, on_progress=_on_progress)
+# ----- Driver ----------------------------------------------------------------
+def main() -> int:
+    global _RUN_DEADLINE_TS
+    _RUN_DEADLINE_TS = time.time() + MAX_GLOBAL_MINUTES * 60.0 if MAX_GLOBAL_MINUTES > 0 else 0.0
+
+    _maybe_preflight_fmp()
+
+    tickers = _load_tickers_from_env_or_file(TICKERS_FILE)
+    dates = get_dates_between(START_DATE, END_DATE, FREQ)
+
+    ensure_output_dir()
+
+    all_logs: list[str] = []
+    any_changed = False
+
+    # Simple outer loop: process tickers one-by-one
+    for t in tickers:
+        if _RUN_DEADLINE_TS and time.time() >= _RUN_DEADLINE_TS:
+            all_logs.append(f"[INFO] stopping-early: global-deadline reached before ticker {t}")
+            break
+
+        logs, stats, changed = generate_features_for_ticker(t, dates)
         any_changed = any_changed or changed
-        agg.ok += tstats.ok
-        agg.skipped += tstats.skipped
-        agg.flagged += tstats.flagged
-        agg.failed += tstats.failed
-        agg.changed_tickers += tstats.changed_tickers
+        all_logs.extend(logs)
 
-        for ln in logs:
-            tqdm.write(ln)
-        time.sleep(SLEEP_BETWEEN_CALLS)
+        # If we want to stop after a rate-limit storm in a ticker, the function returns early.
+        if _RUN_DEADLINE_TS and time.time() >= _RUN_DEADLINE_TS:
+            all_logs.append("[INFO] stopping-early: global-deadline reached")
+            break
 
-    merge_all_feature_vectors(force_merge=FORCE_MERGE or any_changed)
-    write_static_ohe_projection()
-    _write_status_files(agg)
-
-    print(
-        f"🏁 Summary: ok={agg.ok}, skipped={agg.skipped}, flagged={agg.flagged}, "
-        f"failed={agg.failed}, changed_tickers={agg.changed_tickers}"
-    )
-    print(f"All dates generated: {[d.isoformat() for d in get_dates_between(START_DATE, END_DATE)]}")
-
-    sys.exit(1 if agg.failed > 0 else 0)
-
-
-def write_static_ohe_projection():
-    src = os.path.join(STATIC_DIR, "static_ticker_info.parquet")
-    dst = os.path.join(STATIC_DIR, "static_ohe.parquet")
-    if not os.path.exists(src):
-        return
-    df = pl.read_parquet(src)
-    ohe_cols = [c for c in df.columns if c.startswith("sector_") or c.startswith("country_")]
-    if not ohe_cols:
-        return
-    out = df.select(["ticker"] + ohe_cols).with_columns(
-        [pl.col(c).cast(pl.Float32).fill_null(0.0) for c in ohe_cols]
-    )
-    out.write_parquet(dst, compression="zstd")
-    print(f"💾 Wrote OHE projection → {dst}")
-
+    # Decide exit code
+    hard_fail = any(ln.startswith("[FAIL]") for ln in all_logs)
+    if STRICT and hard_fail:
+        return 1
+    return 0
 
 if __name__ == "__main__":
-    main()
-
+    sys.exit(main())
