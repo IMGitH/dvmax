@@ -1,7 +1,6 @@
 import os
 import logging
 from datetime import datetime, date
-from functools import lru_cache
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from dateutil.relativedelta import relativedelta
 from typing import Literal, Optional
@@ -13,19 +12,30 @@ from src.dataprep.fetcher.ticker_params.splits import fetch_splits
 from src.dataprep.fetcher.utils import default_date_range
 from src.dataprep.fetcher.client import fmp_client
 
-logger = logging.getLogger(__name__)  # module logger (no global config)
+# =========================
+# Local, self-contained logging (no global/basicConfig)
+# =========================
+logger = logging.getLogger(__name__)
+if not logger.handlers:
+    _h = logging.StreamHandler()  # stdout
+    _h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    logger.addHandler(_h)
+# Level controlled by env; defaults to INFO. No propagation to avoid dupes.
+logger.setLevel(getattr(logging, os.getenv("DIV_LOG_LEVEL", "INFO").upper(), logging.INFO))
+logger.propagate = False
 
-# ---------------- CONFIG ----------------
-DIV_SOURCE_DEFAULT = os.getenv("DIV_SOURCE", "fmp")          # default to FMP
-YF_TIMEOUT_SEC = float(os.getenv("YF_TIMEOUT_SEC", "15"))     # per your ask
+# =========================
+# Config (no caches)
+# =========================
+DIV_SOURCE_DEFAULT = os.getenv("DIV_SOURCE", "fmp")            # "fmp" | "yfinance"
+YF_TIMEOUT_SEC = float(os.getenv("YF_TIMEOUT_SEC", "15"))
 FMP_TIMEOUT_SEC = float(os.getenv("FMP_TIMEOUT_SEC", "15"))
-CACHE_DIR = os.getenv("DIV_CACHE_DIR", ".cache/dividends")
-os.makedirs(CACHE_DIR, exist_ok=True)
 
 _executor = ThreadPoolExecutor(max_workers=8)
 
-
-# ---------------- HELPERS ----------------
+# =========================
+# Helpers
+# =========================
 def _empty_dividends_df() -> pl.DataFrame:
     return pl.DataFrame({
         "date": pl.Series([], dtype=pl.Date),
@@ -34,13 +44,14 @@ def _empty_dividends_df() -> pl.DataFrame:
 
 
 def adjust_dividends_with_splits(div_df: pl.DataFrame, split_df: pl.DataFrame) -> pl.DataFrame:
+    """Back-adjust historical dividends for stock splits (pre-split dates are divided by ratio)."""
     for row in split_df.iter_rows(named=True):
         split_date, ratio = row["date"], row["split_ratio"]
         div_df = div_df.with_columns(
             pl.when(pl.col("date") < split_date)
-              .then(pl.col("dividend") / ratio)
-              .otherwise(pl.col("dividend"))
-              .alias("dividend")
+             .then(pl.col("dividend") / ratio)
+             .otherwise(pl.col("dividend"))
+             .alias("dividend")
         )
     return div_df
 
@@ -50,40 +61,15 @@ def _with_timeout(fn, timeout_s: float):
     return fut.result(timeout=timeout_s)
 
 
-def _cache_path(ticker: str, source: str) -> str:
-    return os.path.join(CACHE_DIR, f"{ticker}_{source}.parquet")
+def _slice(df: pl.DataFrame, start: date, end: date) -> pl.DataFrame:
+    if df.is_empty():
+        return df
+    return df.filter((pl.col("date") >= start) & (pl.col("date") <= end))
 
-
-def _load_cache(ticker: str, source: str) -> Optional[pl.DataFrame]:
-    p = _cache_path(ticker, source)
-    if os.path.exists(p):
-        try:
-            return pl.read_parquet(p)
-        except Exception as e:
-            logger.debug("Failed reading cache %s: %s", p, e)
-    return None
-
-
-def _save_cache(ticker: str, source: str, df: pl.DataFrame):
-    try:
-        if not df.is_empty():
-            df.write_parquet(_cache_path(ticker, source))
-    except Exception as e:
-        logger.debug("Failed writing cache for %s/%s: %s", ticker, source, e)
-
-
-# ---------------- SPLITS CACHE ----------------
-@lru_cache(maxsize=4096)
-def _cached_splits(ticker: str, mode: str = "yfinance") -> pl.DataFrame:
-    return fetch_splits(ticker, mode=mode)
-
-
-# ---------------- DIVIDENDS FETCHERS ----------------
+# =========================
+# Source fetchers (full history, timeboxed)
+# =========================
 def _yf_full_dividends(ticker: str) -> pl.DataFrame:
-    cached = _load_cache(ticker, "yf")
-    if cached is not None:
-        return cached
-
     def _call():
         tk = yf.Ticker(ticker)
         div = tk.dividends
@@ -95,31 +81,34 @@ def _yf_full_dividends(ticker: str) -> pl.DataFrame:
         )
 
     try:
-        df = _with_timeout(_call, YF_TIMEOUT_SEC)
+        return _with_timeout(_call, YF_TIMEOUT_SEC)
     except TimeoutError:
-        logger.warning("yfinance dividends timed out for %s after %.1fs.", ticker, YF_TIMEOUT_SEC)
-        return _empty_dividends_df()
+        logger.error("yfinance dividends timed out for %s after %.1fs.", ticker, YF_TIMEOUT_SEC)
+        raise
     except Exception as e:
-        logger.warning("yfinance dividends error for %s: %s", ticker, e)
-        return _empty_dividends_df()
-
-    _save_cache(ticker, "yf", df)
-    return df
+        logger.error("yfinance dividends error for %s: %s", ticker, e)
+        raise
 
 
 def _fmp_full_dividends(ticker: str) -> pl.DataFrame:
-    cached = _load_cache(ticker, "fmp")
-    if cached is not None:
-        return cached
-
     def _call():
+        # fmp_client.fetch should raise on non-200 OR return a body we can inspect
         resp = fmp_client.fetch(
             f"historical-price-full/stock_dividend/{ticker}",
             {"from": "1980-01-01", "to": datetime.today().strftime("%Y-%m-%d")}
         )
+
+        # If fetch returns an error envelope instead of raising:
+        if isinstance(resp, dict):
+            msg = (resp.get("Error Message") or resp.get("Note") or "").strip()
+            if "Too Many Requests" in msg or "429" in msg:
+                # hard-fail on rate limit (your requirement)
+                raise RuntimeError(f"FMP API rate limit hit for {ticker}: {msg}")
+
         data = resp.get("historical", [])
         if not data:
             return _empty_dividends_df()
+
         return (
             pl.DataFrame(data)
             .select(["date", "dividend"])
@@ -127,25 +116,21 @@ def _fmp_full_dividends(ticker: str) -> pl.DataFrame:
         )
 
     try:
-        df = _with_timeout(_call, FMP_TIMEOUT_SEC)
+        return _with_timeout(_call, FMP_TIMEOUT_SEC)
     except TimeoutError:
-        logger.warning("FMP dividends timed out for %s after %.1fs.", ticker, FMP_TIMEOUT_SEC)
-        return _empty_dividends_df()
+        logger.error("FMP dividends timed out for %s after %.1fs.", ticker, FMP_TIMEOUT_SEC)
+        raise
+    except RuntimeError as e:
+        # explicit 429 (or similar) -> fail hard
+        logger.error("%s", e)
+        raise
     except Exception as e:
-        logger.warning("FMP dividends error for %s: %s", ticker, e)
-        return _empty_dividends_df()
+        logger.error("FMP dividends error for %s: %s", ticker, e)
+        raise
 
-    _save_cache(ticker, "fmp", df)
-    return df
-
-
-def _slice(df: pl.DataFrame, start: date, end: date) -> pl.DataFrame:
-    if df.is_empty():
-        return df
-    return df.filter((pl.col("date") >= start) & (pl.col("date") <= end))
-
-
-# ---------------- PUBLIC API ----------------
+# =========================
+# Public API
+# =========================
 def fetch_dividends(
     ticker: str,
     start_date: str | None = None,
@@ -157,18 +142,18 @@ def fetch_dividends(
     profile_last_div: Optional[float] = None,
 ) -> pl.DataFrame:
     """
-    Timeboxed, cached dividends fetcher.
-    - Timeout: 15s per source call (configurable via env).
-    - No global logging changes; uses module logger only.
-    - No warn-once throttling (log volume unchanged).
-    - Disk cache for full history; windows slice locally.
-    - Optional early skip if profile_last_div <= 0 (won't affect other logs).
+    Timeboxed dividends fetcher with module-local logging (no caches):
+      - Logging configured only for this module; level via DIV_LOG_LEVEL (default INFO).
+      - Fails hard on FMP 429 (rate limit) and on unexpected errors/timeouts.
+      - No in-memory or disk caches.
+      - Optional early skip for non-payers via profile_last_div<=0.
     """
-
-    # optional: early skip if you pass it; omit to keep exact behavior
+    # Optional fast-skip if you pass it (doesn't affect logs elsewhere)
     if profile_last_div is not None and float(profile_last_div or 0.0) <= 0.0:
+        logger.info("Skipping dividends fetch for non-payer %s (profile_last_div<=0).", ticker)
         return _empty_dividends_df()
 
+    # Window (+ grace)
     start_date, end_date = default_date_range(
         lookback_years, start_date, end_date, quarter_mode=True
     )
@@ -178,8 +163,15 @@ def fetch_dividends(
     window_start = start_dt - grace
     window_end = end_dt + grace
 
+    # Primary source
     if mode == "yfinance":
-        df_full = _yf_full_dividends(ticker)
+        try:
+            df_full = _yf_full_dividends(ticker)
+        except Exception:
+            if fallback_to_fmp:
+                df_full = _fmp_full_dividends(ticker)
+            else:
+                raise
         if df_full.is_empty():
             logger.warning("No dividend data for %s in yfinance.", ticker)
             if fallback_to_fmp:
@@ -190,7 +182,7 @@ def fetch_dividends(
             else:
                 return _empty_dividends_df()
         df = _slice(df_full, window_start, window_end)
-        splits = _cached_splits(ticker, "yfinance")
+        splits = fetch_splits(ticker, mode="yfinance")
         return adjust_dividends_with_splits(df, splits)
 
     if mode == "fmp":
@@ -199,7 +191,9 @@ def fetch_dividends(
             logger.warning("No dividend data for %s in FMP.", ticker)
             return _empty_dividends_df()
         df = _slice(df_full, window_start, window_end)
-        splits = _cached_splits(ticker, "yfinance")
+        # YF splits are fine here too
+        splits = fetch_splits(ticker, mode="yfinance")
         return adjust_dividends_with_splits(df, splits)
 
     raise ValueError(f"Unknown mode '{mode}' in fetch_dividends()")
+    
