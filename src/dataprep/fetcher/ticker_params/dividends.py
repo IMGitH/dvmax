@@ -42,7 +42,7 @@ def fetch_dividends(
     lookback_years: int | None = None,
     grace_quarters: int = 1,
     mode: Literal["fmp", "yfinance"] = "yfinance",
-    fallback_to_fmp: bool = True
+    fallback_to_fmp: bool = False
 ) -> pl.DataFrame:
     # 1. Compute date window + grace
     start_date, end_date = default_date_range(
