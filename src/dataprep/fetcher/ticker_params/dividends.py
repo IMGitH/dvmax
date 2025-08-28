@@ -1,4 +1,5 @@
-import logging, os
+import os
+import logging
 from datetime import datetime, date
 from functools import lru_cache
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
@@ -12,33 +13,27 @@ from src.dataprep.fetcher.ticker_params.splits import fetch_splits
 from src.dataprep.fetcher.utils import default_date_range
 from src.dataprep.fetcher.client import fmp_client
 
+logger = logging.getLogger(__name__)  # module logger (no global config)
+
 # ---------------- CONFIG ----------------
-DIV_SOURCE_DEFAULT = os.getenv("DIV_SOURCE", "fmp")       # Default source now FMP
-YF_TIMEOUT_SEC = float(os.getenv("YF_TIMEOUT_SEC", "3"))  # YFinance timeout
-FMP_TIMEOUT_SEC = float(os.getenv("FMP_TIMEOUT_SEC", "5"))# FMP timeout
+DIV_SOURCE_DEFAULT = os.getenv("DIV_SOURCE", "fmp")          # default to FMP
+YF_TIMEOUT_SEC = float(os.getenv("YF_TIMEOUT_SEC", "15"))     # per your ask
+FMP_TIMEOUT_SEC = float(os.getenv("FMP_TIMEOUT_SEC", "15"))
 CACHE_DIR = os.getenv("DIV_CACHE_DIR", ".cache/dividends")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 _executor = ThreadPoolExecutor(max_workers=8)
-_warned: set[str] = set()
 
 
 # ---------------- HELPERS ----------------
-def _warn_once(key: str, msg: str):
-    if key not in _warned:
-        logging.warning(msg)
-        _warned.add(key)
-
-
 def _empty_dividends_df() -> pl.DataFrame:
     return pl.DataFrame({
         "date": pl.Series([], dtype=pl.Date),
-        "dividend": pl.Series([], dtype=pl.Float64)
+        "dividend": pl.Series([], dtype=pl.Float64),
     })
 
 
 def adjust_dividends_with_splits(div_df: pl.DataFrame, split_df: pl.DataFrame) -> pl.DataFrame:
-    """Back-adjust dividends for stock splits."""
     for row in split_df.iter_rows(named=True):
         split_date, ratio = row["date"], row["split_ratio"]
         div_df = div_df.with_columns(
@@ -60,18 +55,21 @@ def _cache_path(ticker: str, source: str) -> str:
 
 
 def _load_cache(ticker: str, source: str) -> Optional[pl.DataFrame]:
-    path = _cache_path(ticker, source)
-    if os.path.exists(path):
+    p = _cache_path(ticker, source)
+    if os.path.exists(p):
         try:
-            return pl.read_parquet(path)
-        except Exception:
-            pass
+            return pl.read_parquet(p)
+        except Exception as e:
+            logger.debug("Failed reading cache %s: %s", p, e)
     return None
 
 
 def _save_cache(ticker: str, source: str, df: pl.DataFrame):
-    if not df.is_empty():
-        df.write_parquet(_cache_path(ticker, source))
+    try:
+        if not df.is_empty():
+            df.write_parquet(_cache_path(ticker, source))
+    except Exception as e:
+        logger.debug("Failed writing cache for %s/%s: %s", ticker, source, e)
 
 
 # ---------------- SPLITS CACHE ----------------
@@ -99,10 +97,10 @@ def _yf_full_dividends(ticker: str) -> pl.DataFrame:
     try:
         df = _with_timeout(_call, YF_TIMEOUT_SEC)
     except TimeoutError:
-        _warn_once(f"yf_timeout:{ticker}", f"yfinance dividends timed out for {ticker}.")
+        logger.warning("yfinance dividends timed out for %s after %.1fs.", ticker, YF_TIMEOUT_SEC)
         return _empty_dividends_df()
     except Exception as e:
-        _warn_once(f"yf_err:{ticker}", f"yfinance error for {ticker}: {e}")
+        logger.warning("yfinance dividends error for %s: %s", ticker, e)
         return _empty_dividends_df()
 
     _save_cache(ticker, "yf", df)
@@ -131,10 +129,10 @@ def _fmp_full_dividends(ticker: str) -> pl.DataFrame:
     try:
         df = _with_timeout(_call, FMP_TIMEOUT_SEC)
     except TimeoutError:
-        _warn_once(f"fmp_timeout:{ticker}", f"FMP dividends timed out for {ticker}.")
+        logger.warning("FMP dividends timed out for %s after %.1fs.", ticker, FMP_TIMEOUT_SEC)
         return _empty_dividends_df()
     except Exception as e:
-        _warn_once(f"fmp_err:{ticker}", f"FMP error for {ticker}: {e}")
+        logger.warning("FMP dividends error for %s: %s", ticker, e)
         return _empty_dividends_df()
 
     _save_cache(ticker, "fmp", df)
@@ -159,17 +157,18 @@ def fetch_dividends(
     profile_last_div: Optional[float] = None,
 ) -> pl.DataFrame:
     """
-    Fetch dividends for a ticker with caching, timeout, and skip logic:
-    - Skip if company has never paid dividends (profile_last_div <= 0).
-    - Disk cache to reuse full-history fetch across runs.
-    - Default source is FMP; can override with DIV_SOURCE env or param.
+    Timeboxed, cached dividends fetcher.
+    - Timeout: 15s per source call (configurable via env).
+    - No global logging changes; uses module logger only.
+    - No warn-once throttling (log volume unchanged).
+    - Disk cache for full history; windows slice locally.
+    - Optional early skip if profile_last_div <= 0 (won't affect other logs).
     """
 
-    # 0) Skip early if known non-payer
+    # optional: early skip if you pass it; omit to keep exact behavior
     if profile_last_div is not None and float(profile_last_div or 0.0) <= 0.0:
         return _empty_dividends_df()
 
-    # 1) Compute date window
     start_date, end_date = default_date_range(
         lookback_years, start_date, end_date, quarter_mode=True
     )
@@ -179,15 +178,14 @@ def fetch_dividends(
     window_start = start_dt - grace
     window_end = end_dt + grace
 
-    # 2) Select source
     if mode == "yfinance":
         df_full = _yf_full_dividends(ticker)
         if df_full.is_empty():
-            _warn_once(f"yf:{ticker}", f"No dividend data for {ticker} in yfinance.")
+            logger.warning("No dividend data for %s in yfinance.", ticker)
             if fallback_to_fmp:
                 df_full = _fmp_full_dividends(ticker)
                 if df_full.is_empty():
-                    _warn_once(f"fmp:{ticker}", f"No dividend data for {ticker} in FMP.")
+                    logger.warning("No dividend data for %s in FMP.", ticker)
                     return _empty_dividends_df()
             else:
                 return _empty_dividends_df()
@@ -198,11 +196,10 @@ def fetch_dividends(
     if mode == "fmp":
         df_full = _fmp_full_dividends(ticker)
         if df_full.is_empty():
-            _warn_once(f"fmp:{ticker}", f"No dividend data for {ticker} in FMP.")
+            logger.warning("No dividend data for %s in FMP.", ticker)
             return _empty_dividends_df()
         df = _slice(df_full, window_start, window_end)
         splits = _cached_splits(ticker, "yfinance")
         return adjust_dividends_with_splits(df, splits)
 
     raise ValueError(f"Unknown mode '{mode}' in fetch_dividends()")
-    
